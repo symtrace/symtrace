@@ -70,10 +70,7 @@ impl NodeIndex {
                     .push(i);
             }
 
-            by_identity_hash
-                .entry(n.identity_hash)
-                .or_default()
-                .push(i);
+            by_identity_hash.entry(n.identity_hash).or_default().push(i);
 
             let size = n.subtree_size;
             by_kind_with_size
@@ -115,11 +112,7 @@ pub fn compute_diff(
 /// Return the total number of nodes in an AST (for benchmarking metrics).
 #[inline]
 pub fn count_nodes(node: &AstNode) -> u64 {
-    1 + node
-        .children
-        .iter()
-        .map(|c| count_nodes(c))
-        .sum::<u64>()
+    1 + node.children.iter().map(count_nodes).sum::<u64>()
 }
 
 // ── Structural diff algorithm ────────────────────────────────────────
@@ -278,10 +271,8 @@ fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRec
                     continue;
                 }
                 let sim = node_identity::composite_similarity(&na.ast_node, &nb.ast_node);
-                if sim >= node_identity::MODIFY_THRESHOLD {
-                    if best.map_or(true, |(_, s)| sim > s) {
-                        best = Some((idx, sim));
-                    }
+                if sim >= node_identity::MODIFY_THRESHOLD && best.is_none_or(|(_, s)| sim > s) {
+                    best = Some((idx, sim));
                 }
             }
         }
@@ -322,10 +313,7 @@ fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRec
                     entity_type: entity,
                     old_location: Some(format_location(na)),
                     new_location: Some(format_location(nb)),
-                    details: format!(
-                        "{} renamed from '{}' to '{}'",
-                        na.kind, na.name, nb.name
-                    ),
+                    details: format!("{} renamed from '{}' to '{}'", na.kind, na.name, nb.name),
                     similarity,
                 });
             }
@@ -509,15 +497,30 @@ fn is_significant_kind(kind: &str) -> bool {
 #[inline]
 fn classify_entity(kind: &str) -> EntityType {
     match kind {
-        "function_item" | "function_definition" | "function_declaration"
-        | "method_definition" | "method_declaration" | "arrow_function"
-        | "closure_expression" | "lambda" => EntityType::Function,
+        "function_item"
+        | "function_definition"
+        | "function_declaration"
+        | "method_definition"
+        | "method_declaration"
+        | "arrow_function"
+        | "closure_expression"
+        | "lambda" => EntityType::Function,
 
-        "struct_item" | "enum_item" | "impl_item" | "trait_item"
-        | "class_declaration" | "class_definition" | "interface_declaration" => EntityType::Class,
+        "struct_item"
+        | "enum_item"
+        | "impl_item"
+        | "trait_item"
+        | "class_declaration"
+        | "class_definition"
+        | "interface_declaration" => EntityType::Class,
 
-        "let_declaration" | "const_item" | "static_item" | "variable_declaration"
-        | "variable_declarator" | "lexical_declaration" | "const_declaration"
+        "let_declaration"
+        | "const_item"
+        | "static_item"
+        | "variable_declaration"
+        | "variable_declarator"
+        | "lexical_declaration"
+        | "const_declaration"
         | "assignment_statement" => EntityType::Variable,
 
         "block" | "statement_block" => EntityType::Block,
@@ -562,7 +565,7 @@ fn collect_all_as_deletes(node: &AstNode) -> Vec<OperationRecord> {
 mod tests {
     use super::*;
     use crate::ast_builder::parse_content;
-use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLanguage};
+    use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLanguage};
     // ── Helpers ───────────────────────────────────────────────────────
 
     fn parse(src: &str, lang: SupportedLanguage) -> AstNode {
@@ -584,7 +587,10 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
     #[test]
     fn count_nodes_grows_with_source() {
         let small = parse("fn f() {}", SupportedLanguage::Rust);
-        let big = parse("fn f() { let x = 1; let y = 2; x }", SupportedLanguage::Rust);
+        let big = parse(
+            "fn f() { let x = 1; let y = 2; x }",
+            SupportedLanguage::Rust,
+        );
         assert!(count_nodes(&big) > count_nodes(&small));
     }
 
@@ -603,7 +609,12 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
         let b = parse("fn greet() {}", SupportedLanguage::Rust);
         let ops = compute_diff(None, Some(&b), false);
         for op in &ops {
-            assert_eq!(op.op_type, OperationType::Insert, "expected INSERT, got {:?}", op.op_type);
+            assert_eq!(
+                op.op_type,
+                OperationType::Insert,
+                "expected INSERT, got {:?}",
+                op.op_type
+            );
             assert!(op.old_location.is_none());
             assert!(op.new_location.is_some());
         }
@@ -616,7 +627,12 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
         let a = parse("fn greet() {}", SupportedLanguage::Rust);
         let ops = compute_diff(Some(&a), None, false);
         for op in &ops {
-            assert_eq!(op.op_type, OperationType::Delete, "expected DELETE, got {:?}", op.op_type);
+            assert_eq!(
+                op.op_type,
+                OperationType::Delete,
+                "expected DELETE, got {:?}",
+                op.op_type
+            );
             assert!(op.old_location.is_some());
             assert!(op.new_location.is_none());
         }
@@ -687,7 +703,10 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
     fn moved_function_produces_move() {
         // In A: top-level fn helper; In B: same fn inside impl block
         let a = parse("fn helper() -> i32 { 42 }", SupportedLanguage::Rust);
-        let b = parse("struct S; impl S { fn helper() -> i32 { 42 } }", SupportedLanguage::Rust);
+        let b = parse(
+            "struct S; impl S { fn helper() -> i32 { 42 } }",
+            SupportedLanguage::Rust,
+        );
         let ops = compute_diff(Some(&a), Some(&b), false);
         let moves = count_op(&ops, &OperationType::Move);
         assert!(moves >= 1, "expected at least one MOVE, ops: {ops:?}");
@@ -698,7 +717,10 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
     #[test]
     fn python_new_function_insert() {
         let a = parse("def foo():\n    pass\n", SupportedLanguage::Python);
-        let b = parse("def foo():\n    pass\ndef bar():\n    pass\n", SupportedLanguage::Python);
+        let b = parse(
+            "def foo():\n    pass\ndef bar():\n    pass\n",
+            SupportedLanguage::Python,
+        );
         let ops = compute_diff(Some(&a), Some(&b), false);
         assert!(count_op(&ops, &OperationType::Insert) >= 1, "ops: {ops:?}");
     }
@@ -709,14 +731,20 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
         let b = parse("class NewName:\n    pass\n", SupportedLanguage::Python);
         let ops = compute_diff(Some(&a), Some(&b), false);
         let renames = count_op(&ops, &OperationType::Rename);
-        assert!(renames >= 1, "expected RENAME for Python class, ops: {ops:?}");
+        assert!(
+            renames >= 1,
+            "expected RENAME for Python class, ops: {ops:?}"
+        );
     }
 
     // ── JavaScript ───────────────────────────────────────────────────
 
     #[test]
     fn js_function_delete() {
-        let a = parse("function alpha() {} function beta() {}", SupportedLanguage::JavaScript);
+        let a = parse(
+            "function alpha() {} function beta() {}",
+            SupportedLanguage::JavaScript,
+        );
         let b = parse("function alpha() {}", SupportedLanguage::JavaScript);
         let ops = compute_diff(Some(&a), Some(&b), false);
         assert!(count_op(&ops, &OperationType::Delete) >= 1, "ops: {ops:?}");
@@ -766,16 +794,28 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
     fn inserted_rust_function_has_function_entity() {
         let b = parse("fn my_func() {}", SupportedLanguage::Rust);
         let ops = compute_diff(None, Some(&b), false);
-        let func_ops: Vec<_> = ops.iter().filter(|o| o.entity_type == EntityType::Function).collect();
-        assert!(!func_ops.is_empty(), "expected at least one Function entity, ops: {ops:?}");
+        let func_ops: Vec<_> = ops
+            .iter()
+            .filter(|o| o.entity_type == EntityType::Function)
+            .collect();
+        assert!(
+            !func_ops.is_empty(),
+            "expected at least one Function entity, ops: {ops:?}"
+        );
     }
 
     #[test]
     fn inserted_rust_struct_has_class_entity() {
         let b = parse("struct Point { x: f64, y: f64 }", SupportedLanguage::Rust);
         let ops = compute_diff(None, Some(&b), false);
-        let class_ops: Vec<_> = ops.iter().filter(|o| o.entity_type == EntityType::Class).collect();
-        assert!(!class_ops.is_empty(), "expected Class entity for struct, ops: {ops:?}");
+        let class_ops: Vec<_> = ops
+            .iter()
+            .filter(|o| o.entity_type == EntityType::Class)
+            .collect();
+        assert!(
+            !class_ops.is_empty(),
+            "expected Class entity for struct, ops: {ops:?}"
+        );
     }
 
     // ── Rename / modify priority ──────────────────────────────────────
@@ -787,7 +827,10 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
         let b = parse("fn process() -> i32 { 99 }", SupportedLanguage::Rust);
         let ops = compute_diff(Some(&a), Some(&b), false);
         let renames = count_op(&ops, &OperationType::Rename);
-        assert_eq!(renames, 0, "body change should not be classified as RENAME, ops: {ops:?}");
+        assert_eq!(
+            renames, 0,
+            "body change should not be classified as RENAME, ops: {ops:?}"
+        );
         assert!(count_op(&ops, &OperationType::Modify) >= 1);
     }
 
@@ -797,8 +840,20 @@ use crate::types::{AstNode, EntityType, OperationType, ParserLimits, SupportedLa
     fn comment_only_change_produces_no_ops_in_logic_only() {
         let a_src = "fn work() {\n    let x = 1;\n}";
         let b_src = "fn work() {\n    // a new comment\n    let x = 1;\n}";
-        let a = parse_content(a_src, SupportedLanguage::Rust, true, &ParserLimits::default()).unwrap();
-        let b = parse_content(b_src, SupportedLanguage::Rust, true, &ParserLimits::default()).unwrap();
+        let a = parse_content(
+            a_src,
+            SupportedLanguage::Rust,
+            true,
+            &ParserLimits::default(),
+        )
+        .unwrap();
+        let b = parse_content(
+            b_src,
+            SupportedLanguage::Rust,
+            true,
+            &ParserLimits::default(),
+        )
+        .unwrap();
         let ops = compute_diff(Some(&a), Some(&b), true);
         assert!(
             ops.is_empty(),

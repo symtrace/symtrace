@@ -14,9 +14,7 @@
 //!
 //! Output: `primary_class` plus a `confidence_score` ∈ [0, 1].
 
-use crate::types::{
-    CommitClass, CommitClassification, DiffSummary, FileDiff, OperationType,
-};
+use crate::types::{CommitClass, CommitClassification, DiffSummary, FileDiff, OperationType};
 
 // ── Thresholds ───────────────────────────────────────────────────────
 
@@ -41,8 +39,8 @@ pub fn classify_commit(
     logic_only_no_changes: bool,
 ) -> CommitClassification {
     // ── Gather metrics ───────────────────────────────────────────────
-    let total_ops = summary.moves + summary.renames + summary.inserts
-        + summary.deletes + summary.modifications;
+    let total_ops =
+        summary.moves + summary.renames + summary.inserts + summary.deletes + summary.modifications;
 
     // If there are zero ops at all, it's formatting_only
     if total_ops == 0 {
@@ -286,10 +284,7 @@ fn compute_avg_complexity_delta(file_diffs: &[FileDiff]) -> f64 {
 
 /// Count the total number of refactor patterns detected.
 fn count_refactor_patterns(file_diffs: &[FileDiff]) -> usize {
-    file_diffs
-        .iter()
-        .map(|fd| fd.refactor_patterns.len())
-        .sum()
+    file_diffs.iter().map(|fd| fd.refactor_patterns.len()).sum()
 }
 
 /// Count newly inserted public symbols (functions & classes).
@@ -315,7 +310,7 @@ fn count_control_flow_changes(file_diffs: &[FileDiff]) -> usize {
         .filter(|op| {
             op.similarity
                 .as_ref()
-                .map_or(false, |s| s.control_flow_changed)
+                .is_some_and(|s| s.control_flow_changed)
         })
         .count()
 }
@@ -326,8 +321,8 @@ fn count_control_flow_changes(file_diffs: &[FileDiff]) -> usize {
 mod tests {
     use super::*;
     use crate::types::{
-        ChangeIntensity, DiffSummary, EntityType, FileDiff, OperationRecord,
-        OperationType, RefactorKind, RefactorPattern, SimilarityScore,
+        ChangeIntensity, DiffSummary, EntityType, FileDiff, OperationRecord, OperationType,
+        RefactorKind, RefactorPattern, SimilarityScore,
     };
 
     fn make_summary(
@@ -425,9 +420,24 @@ mod tests {
         let diffs = vec![FileDiff {
             file_path: "new.rs".to_string(),
             operations: vec![
-                make_op(OperationType::Insert, EntityType::Function, "fn alpha inserted", None),
-                make_op(OperationType::Insert, EntityType::Function, "fn beta inserted", None),
-                make_op(OperationType::Insert, EntityType::Class, "struct Gamma inserted", None),
+                make_op(
+                    OperationType::Insert,
+                    EntityType::Function,
+                    "fn alpha inserted",
+                    None,
+                ),
+                make_op(
+                    OperationType::Insert,
+                    EntityType::Function,
+                    "fn beta inserted",
+                    None,
+                ),
+                make_op(
+                    OperationType::Insert,
+                    EntityType::Class,
+                    "struct Gamma inserted",
+                    None,
+                ),
             ],
             refactor_patterns: vec![],
         }];
@@ -537,9 +547,12 @@ mod tests {
     fn confidence_score_is_bounded() {
         let diffs = vec![FileDiff {
             file_path: "x.rs".to_string(),
-            operations: vec![
-                make_op(OperationType::Insert, EntityType::Function, "fn a inserted", None),
-            ],
+            operations: vec![make_op(
+                OperationType::Insert,
+                EntityType::Function,
+                "fn a inserted",
+                None,
+            )],
             refactor_patterns: vec![],
         }];
         let summary = make_summary(1, 0, 0, 1, 0, 0);

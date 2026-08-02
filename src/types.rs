@@ -9,6 +9,10 @@ pub enum SupportedLanguage {
     TypeScript,
     Python,
     Java,
+    C,
+    Cpp,
+    Go,
+    Json,
 }
 
 impl std::fmt::Display for SupportedLanguage {
@@ -19,6 +23,10 @@ impl std::fmt::Display for SupportedLanguage {
             Self::TypeScript => write!(f, "TypeScript"),
             Self::Python => write!(f, "Python"),
             Self::Java => write!(f, "Java"),
+            Self::C => write!(f, "C"),
+            Self::Cpp => write!(f, "C++"),
+            Self::Go => write!(f, "Go"),
+            Self::Json => write!(f, "JSON"),
         }
     }
 }
@@ -29,6 +37,8 @@ impl std::fmt::Display for SupportedLanguage {
 #[allow(dead_code)]
 pub struct FileChange {
     pub path: String,
+    pub old_path: Option<String>,
+    pub new_path: Option<String>,
     pub old_content: Option<String>,
     pub new_content: Option<String>,
     pub status: ChangeStatus,
@@ -36,6 +46,17 @@ pub struct FileChange {
     pub old_blob_hash: Option<String>,
     /// Git blob OID for the new version of the file (hex string)
     pub new_blob_hash: Option<String>,
+}
+
+impl FileChange {
+    /// Return the active display path (prefers new_path, falls back to old_path or path)
+    #[allow(dead_code)]
+    pub fn display_path(&self) -> &str {
+        self.new_path
+            .as_deref()
+            .or(self.old_path.as_deref())
+            .unwrap_or(&self.path)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,7 +149,7 @@ impl std::fmt::Display for EntityType {
 
 // ── Operation Record ─────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OperationRecord {
     #[serde(rename = "type")]
     pub op_type: OperationType,
@@ -211,7 +232,7 @@ impl std::fmt::Display for ChangeIntensity {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SimilarityScore {
     pub structure_similarity: f64,
     pub token_similarity: f64,
@@ -360,10 +381,22 @@ pub struct ParserLimits {
     pub parse_timeout_ms: u64,
 }
 
+impl ParserLimits {
+    pub fn compute_limits_hash(&self) -> u64 {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.max_file_size_bytes.to_le_bytes());
+        hasher.update(&self.max_ast_nodes.to_le_bytes());
+        hasher.update(&self.max_recursion_depth.to_le_bytes());
+        hasher.update(&self.parse_timeout_ms.to_le_bytes());
+        let hash_bytes = hasher.finalize();
+        u64::from_le_bytes(hash_bytes.as_bytes()[..8].try_into().unwrap())
+    }
+}
+
 impl Default for ParserLimits {
     fn default() -> Self {
         Self {
-            max_file_size_bytes: 5_242_880,  // 5 MiB
+            max_file_size_bytes: 5_242_880, // 5 MiB
             max_ast_nodes: 200_000,
             max_recursion_depth: 2_048,
             parse_timeout_ms: 2_000,
@@ -552,6 +585,8 @@ mod tests {
     fn file_change_clone() {
         let fc = FileChange {
             path: "src/lib.rs".to_string(),
+            old_path: Some("src/lib.rs".to_string()),
+            new_path: Some("src/lib.rs".to_string()),
             old_content: Some("fn a() {}".to_string()),
             new_content: Some("fn b() {}".to_string()),
             status: ChangeStatus::Modified,

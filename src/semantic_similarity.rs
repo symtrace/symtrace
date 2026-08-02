@@ -82,12 +82,7 @@ fn classify_intensity(similarity_percent: f64) -> ChangeIntensity {
 /// Approximate cyclomatic complexity by counting decision points.
 fn cyclomatic_complexity(node: &AstNode) -> u32 {
     let decision = if is_decision_point(&node.kind) { 1 } else { 0 };
-    decision
-        + node
-            .children
-            .iter()
-            .map(|c| cyclomatic_complexity(c))
-            .sum::<u32>()
+    decision + node.children.iter().map(cyclomatic_complexity).sum::<u32>()
 }
 
 fn is_decision_point(kind: &str) -> bool {
@@ -163,7 +158,7 @@ fn is_control_flow_kind(kind: &str) -> bool {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn count_nodes(node: &AstNode) -> u64 {
-    1 + node.children.iter().map(|c| count_nodes(c)).sum::<u64>()
+    1 + node.children.iter().map(count_nodes).sum::<u64>()
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -172,7 +167,7 @@ fn count_nodes(node: &AstNode) -> u64 {
 mod tests {
     use super::*;
     use crate::ast_builder::parse_content;
-use crate::types::{ParserLimits, SupportedLanguage};
+    use crate::types::{ParserLimits, SupportedLanguage};
     fn parse(src: &str, lang: SupportedLanguage) -> AstNode {
         parse_content(src, lang, false, &ParserLimits::default()).expect("parse failed")
     }

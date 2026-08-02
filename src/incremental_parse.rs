@@ -56,6 +56,12 @@ pub struct TreeCache {
     cache: Mutex<LruCache<String, Tree>>,
 }
 
+impl Default for TreeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TreeCache {
     /// Create a new tree cache with default capacity.
     pub fn new() -> Self {
@@ -84,6 +90,12 @@ impl TreeCache {
     /// Return the number of cached trees.
     pub fn len(&self) -> usize {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    /// Check if the tree cache is empty.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

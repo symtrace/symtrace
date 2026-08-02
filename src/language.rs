@@ -11,6 +11,10 @@ pub fn detect_language(file_path: &str) -> Option<SupportedLanguage> {
         "ts" | "tsx" => Some(SupportedLanguage::TypeScript),
         "py" | "pyi" => Some(SupportedLanguage::Python),
         "java" => Some(SupportedLanguage::Java),
+        "c" | "h" => Some(SupportedLanguage::C),
+        "cpp" | "hpp" | "cc" | "cxx" | "h++" => Some(SupportedLanguage::Cpp),
+        "go" => Some(SupportedLanguage::Go),
+        "json" | "jsonc" => Some(SupportedLanguage::Json),
         _ => None,
     }
 }
@@ -23,6 +27,10 @@ pub fn get_tree_sitter_language(lang: SupportedLanguage) -> tree_sitter::Languag
         SupportedLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         SupportedLanguage::Python => tree_sitter_python::LANGUAGE.into(),
         SupportedLanguage::Java => tree_sitter_java::LANGUAGE.into(),
+        SupportedLanguage::C => tree_sitter_c::LANGUAGE.into(),
+        SupportedLanguage::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+        SupportedLanguage::Go => tree_sitter_go::LANGUAGE.into(),
+        SupportedLanguage::Json => tree_sitter_json::LANGUAGE.into(),
     }
 }
 
@@ -51,19 +59,59 @@ mod tests {
 
     #[test]
     fn ts_extensions() {
-        assert_eq!(detect_language("index.ts"), Some(SupportedLanguage::TypeScript));
-        assert_eq!(detect_language("comp.tsx"), Some(SupportedLanguage::TypeScript));
+        assert_eq!(
+            detect_language("index.ts"),
+            Some(SupportedLanguage::TypeScript)
+        );
+        assert_eq!(
+            detect_language("comp.tsx"),
+            Some(SupportedLanguage::TypeScript)
+        );
     }
 
     #[test]
     fn python_extensions() {
-        assert_eq!(detect_language("script.py"), Some(SupportedLanguage::Python));
+        assert_eq!(
+            detect_language("script.py"),
+            Some(SupportedLanguage::Python)
+        );
         assert_eq!(detect_language("stub.pyi"), Some(SupportedLanguage::Python));
     }
 
     #[test]
     fn java_extension() {
         assert_eq!(detect_language("Main.java"), Some(SupportedLanguage::Java));
+    }
+
+    #[test]
+    fn c_extensions() {
+        assert_eq!(detect_language("main.c"), Some(SupportedLanguage::C));
+        assert_eq!(detect_language("header.h"), Some(SupportedLanguage::C));
+    }
+
+    #[test]
+    fn cpp_extensions() {
+        for ext in &["main.cpp", "header.hpp", "mod.cc", "source.cxx", "head.h++"] {
+            assert_eq!(
+                detect_language(ext),
+                Some(SupportedLanguage::Cpp),
+                "failed for {ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn go_extension() {
+        assert_eq!(detect_language("main.go"), Some(SupportedLanguage::Go));
+    }
+
+    #[test]
+    fn json_extensions() {
+        assert_eq!(
+            detect_language("config.json"),
+            Some(SupportedLanguage::Json)
+        );
+        assert_eq!(detect_language("data.jsonc"), Some(SupportedLanguage::Json));
     }
 
     #[test]
@@ -102,6 +150,10 @@ mod tests {
             SupportedLanguage::TypeScript,
             SupportedLanguage::Python,
             SupportedLanguage::Java,
+            SupportedLanguage::C,
+            SupportedLanguage::Cpp,
+            SupportedLanguage::Go,
+            SupportedLanguage::Json,
         ] {
             let _ts_lang = get_tree_sitter_language(lang);
         }

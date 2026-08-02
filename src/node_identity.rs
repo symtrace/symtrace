@@ -73,11 +73,8 @@ fn compute_bottom_up_with_reuse(
     logic_only: bool,
 ) -> u64 {
     // Check if this node is entirely outside all changed ranges
-    let is_changed = incremental_parse::overlaps_changed_ranges(
-        node.start_byte,
-        node.end_byte,
-        changed_ranges,
-    );
+    let is_changed =
+        incremental_parse::overlaps_changed_ranges(node.start_byte, node.end_byte, changed_ranges);
 
     // If unchanged and we have a matching old node, reuse hashes
     if !is_changed {
@@ -92,12 +89,8 @@ fn compute_bottom_up_with_reuse(
                 let mut reused = 1u64;
                 for (i, child) in node.children.iter_mut().enumerate() {
                     let old_child = old.children.get(i);
-                    reused += compute_bottom_up_with_reuse(
-                        child,
-                        old_child,
-                        changed_ranges,
-                        logic_only,
-                    );
+                    reused +=
+                        compute_bottom_up_with_reuse(child, old_child, changed_ranges, logic_only);
                 }
                 return reused;
             }
@@ -318,6 +311,10 @@ pub fn is_identifier_kind(kind: &str) -> bool {
             | "field_identifier"
             | "property_identifier"
             | "shorthand_field_identifier"
+            | "namespace_identifier"
+            | "package_identifier"
+            | "property_name"
+            | "key"
             | "name"
     )
 }
@@ -413,8 +410,14 @@ mod tests {
 
     #[test]
     fn inner_node_structural_hash_depends_on_child_kinds() {
-        let mut tree1 = inner("block", vec![leaf("identifier", "a"), leaf("identifier", "b")]);
-        let mut tree2 = inner("block", vec![leaf("identifier", "x"), leaf("identifier", "y")]);
+        let mut tree1 = inner(
+            "block",
+            vec![leaf("identifier", "a"), leaf("identifier", "b")],
+        );
+        let mut tree2 = inner(
+            "block",
+            vec![leaf("identifier", "x"), leaf("identifier", "y")],
+        );
         compute_hashes(&mut tree1, false);
         compute_hashes(&mut tree2, false);
         // Same structure (block -> identifier, identifier) → equal
@@ -507,10 +510,7 @@ mod tests {
     fn renamed_function_body_same_identity() {
         let mut call_a = inner(
             "call_expression",
-            vec![
-                leaf("identifier", "my_func"),
-                leaf("integer_literal", "42"),
-            ],
+            vec![leaf("identifier", "my_func"), leaf("integer_literal", "42")],
         );
         let mut call_b = inner(
             "call_expression",
@@ -569,8 +569,14 @@ mod tests {
 
     #[test]
     fn identical_nodes_similarity_is_one() {
-        let mut a = inner("block", vec![leaf("identifier", "x"), leaf("integer_literal", "1")]);
-        let mut b = inner("block", vec![leaf("identifier", "x"), leaf("integer_literal", "1")]);
+        let mut a = inner(
+            "block",
+            vec![leaf("identifier", "x"), leaf("integer_literal", "1")],
+        );
+        let mut b = inner(
+            "block",
+            vec![leaf("identifier", "x"), leaf("integer_literal", "1")],
+        );
         compute_hashes(&mut a, false);
         compute_hashes(&mut b, false);
         assert!((structural_similarity(&a, &b) - 1.0).abs() < f64::EPSILON);
@@ -580,7 +586,13 @@ mod tests {
     #[test]
     fn completely_different_nodes_low_similarity() {
         let mut a = inner("block", vec![leaf("identifier", "x")]);
-        let mut b = inner("function_item", vec![leaf("integer_literal", "42"), leaf("string_literal", "hello")]);
+        let mut b = inner(
+            "function_item",
+            vec![
+                leaf("integer_literal", "42"),
+                leaf("string_literal", "hello"),
+            ],
+        );
         compute_hashes(&mut a, false);
         compute_hashes(&mut b, false);
         assert!(composite_similarity(&a, &b) < 0.5);
@@ -591,11 +603,20 @@ mod tests {
         // Two call expressions with different identifier names but same literal
         // structural_hash same (same tree shape), content_hash differs (different text),
         // identity_hash same (identifiers normalised to <IDENTIFIER>)
-        let mut a = inner("call_expression", vec![leaf("identifier", "foo"), leaf("integer_literal", "1")]);
-        let mut b = inner("call_expression", vec![leaf("identifier", "bar"), leaf("integer_literal", "1")]);
+        let mut a = inner(
+            "call_expression",
+            vec![leaf("identifier", "foo"), leaf("integer_literal", "1")],
+        );
+        let mut b = inner(
+            "call_expression",
+            vec![leaf("identifier", "bar"), leaf("integer_literal", "1")],
+        );
         compute_hashes(&mut a, false);
         compute_hashes(&mut b, false);
-        assert_eq!(a.structural_hash, b.structural_hash, "structural should match");
+        assert_eq!(
+            a.structural_hash, b.structural_hash,
+            "structural should match"
+        );
         assert_ne!(a.content_hash, b.content_hash, "content should differ");
         assert_eq!(a.identity_hash, b.identity_hash, "identity should match");
         assert!(only_identifiers_changed(&a, &b));
@@ -627,12 +648,7 @@ mod tests {
             vec![leaf("identifier", "foo"), leaf("integer_literal", "42")],
         );
         let empty_ranges: Vec<tree_sitter::Range> = vec![];
-        let reused = compute_hashes_incremental(
-            &mut incremental,
-            &original,
-            &empty_ranges,
-            false,
-        );
+        let reused = compute_hashes_incremental(&mut incremental, &original, &empty_ranges, false);
 
         assert_eq!(incremental.structural_hash, original.structural_hash);
         assert_eq!(incremental.content_hash, original.content_hash);
@@ -696,8 +712,7 @@ mod tests {
 
         // First child should have been reused (its range is outside changed)
         assert_eq!(
-            new_inc.children[0].content_hash,
-            old.children[0].content_hash,
+            new_inc.children[0].content_hash, old.children[0].content_hash,
             "unchanged child should have same content hash as old"
         );
     }

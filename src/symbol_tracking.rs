@@ -107,40 +107,67 @@ fn compute_signature_hash(node: &AstNode) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-/// Extract a human-readable name from a node by looking at identifier children.
+/// Extract a human-readable name from a node by looking at identifier children using BFS.
 fn extract_symbol_name(node: &AstNode) -> String {
-    // Direct children
+    let mut queue = std::collections::VecDeque::new();
     for child in &node.children {
-        if node_identity::is_identifier_kind(&child.kind) && !child.text.is_empty() {
-            return child.text.clone();
-        }
+        queue.push_back((child, 1usize));
     }
-    // One level deeper
-    for child in &node.children {
-        for grandchild in &child.children {
-            if node_identity::is_identifier_kind(&grandchild.kind) && !grandchild.text.is_empty() {
-                return grandchild.text.clone();
+
+    while let Some((curr, depth)) = queue.pop_front() {
+        if node_identity::is_identifier_kind(&curr.kind) && !curr.text.is_empty() {
+            return curr.text.clone();
+        }
+        if depth < 5 {
+            for child in &curr.children {
+                if classify_symbol_entity(&child.kind).is_none() {
+                    queue.push_back((child, depth + 1));
+                }
             }
         }
     }
+
     format!("anon@L{}", node.start_row + 1)
 }
 
 /// Classify a node kind as a trackable symbol entity type, or None.
 fn classify_symbol_entity(kind: &str) -> Option<EntityType> {
     match kind {
-        "function_item" | "function_definition" | "function_declaration"
-        | "method_definition" | "method_declaration" | "arrow_function"
-        | "closure_expression" | "lambda" => Some(EntityType::Function),
+        "function_item"
+        | "function_definition"
+        | "function_declaration"
+        | "method_definition"
+        | "method_declaration"
+        | "arrow_function"
+        | "closure_expression"
+        | "lambda" => Some(EntityType::Function),
 
-        "struct_item" | "enum_item" | "impl_item" | "trait_item"
-        | "class_declaration" | "class_definition" | "interface_declaration" => {
-            Some(EntityType::Class)
-        }
+        "struct_item"
+        | "enum_item"
+        | "impl_item"
+        | "trait_item"
+        | "class_declaration"
+        | "class_definition"
+        | "interface_declaration"
+        | "struct_specifier"
+        | "enum_specifier"
+        | "type_definition"
+        | "type_spec"
+        | "type_declaration"
+        | "class_specifier"
+        | "namespace_definition"
+        | "template_declaration" => Some(EntityType::Class),
 
-        "let_declaration" | "const_item" | "static_item" | "variable_declaration"
-        | "variable_declarator" | "lexical_declaration" | "const_declaration"
-        | "assignment_statement" => Some(EntityType::Variable),
+        "let_declaration"
+        | "const_item"
+        | "static_item"
+        | "variable_declaration"
+        | "variable_declarator"
+        | "lexical_declaration"
+        | "const_declaration"
+        | "assignment_statement"
+        | "pair"
+        | "short_var_declaration" => Some(EntityType::Variable),
 
         _ => None,
     }
@@ -208,11 +235,7 @@ fn detect_cross_file_events(
                 && new_sym.entity_type == old_sym.entity_type
             {
                 // Compute similarity using AST nodes
-                let sim = compute_cross_file_similarity(
-                    old_sym,
-                    new_sym,
-                    parsed_pairs,
-                );
+                let sim = compute_cross_file_similarity(old_sym, new_sym, parsed_pairs);
                 if sim >= CROSS_FILE_RENAME_THRESHOLD {
                     matched_new[ni] = true;
                     events.push(CrossFileMatch {
@@ -245,11 +268,7 @@ fn detect_cross_file_events(
                 && new_sym.entity_type == old_sym.entity_type
                 && new_sym.signature_hash != old_sym.signature_hash
             {
-                let sim = compute_cross_file_similarity(
-                    old_sym,
-                    new_sym,
-                    parsed_pairs,
-                );
+                let sim = compute_cross_file_similarity(old_sym, new_sym, parsed_pairs);
                 if sim >= API_SURFACE_THRESHOLD {
                     matched_new[ni] = true;
                     events.push(CrossFileMatch {
@@ -261,10 +280,7 @@ fn detect_cross_file_events(
                         similarity_score: sim,
                         description: format!(
                             "{} '{}' API changed when moving from '{}' to '{}'",
-                            old_sym.entity_type,
-                            old_sym.name,
-                            old_sym.file_path,
-                            new_sym.file_path,
+                            old_sym.entity_type, old_sym.name, old_sym.file_path, new_sym.file_path,
                         ),
                     });
                     break;
@@ -343,7 +359,7 @@ fn find_node_by_name_and_kind<'a>(
 mod tests {
     use super::*;
     use crate::ast_builder::parse_content;
-use crate::types::{ParserLimits, SupportedLanguage};
+    use crate::types::{ParserLimits, SupportedLanguage};
     fn parse(src: &str, lang: SupportedLanguage) -> AstNode {
         parse_content(src, lang, false, &ParserLimits::default()).expect("parse failed")
     }
@@ -406,19 +422,17 @@ use crate::types::{ParserLimits, SupportedLanguage};
     #[test]
     fn cross_file_rename_detected() {
         // Same function body, different name, different file
-        let old_a = parse("fn old_name(x: i32) -> i32 { x + 1 }", SupportedLanguage::Rust);
-        let new_b = parse("fn new_name(x: i32) -> i32 { x + 1 }", SupportedLanguage::Rust);
+        let old_a = parse(
+            "fn old_name(x: i32) -> i32 { x + 1 }",
+            SupportedLanguage::Rust,
+        );
+        let new_b = parse(
+            "fn new_name(x: i32) -> i32 { x + 1 }",
+            SupportedLanguage::Rust,
+        );
         let pairs = vec![
-            (
-                "src/file_a.rs".to_string(),
-                Some(old_a),
-                None,
-            ),
-            (
-                "src/file_b.rs".to_string(),
-                None,
-                Some(new_b),
-            ),
+            ("src/file_a.rs".to_string(), Some(old_a), None),
+            ("src/file_b.rs".to_string(), None, Some(new_b)),
         ];
         let result = track_cross_file_symbols(&pairs);
         let renames: Vec<_> = result
@@ -435,14 +449,8 @@ use crate::types::{ParserLimits, SupportedLanguage};
 
     #[test]
     fn symbol_table_counts_all_symbols() {
-        let a = parse(
-            "fn foo() {}\nfn bar() {}",
-            SupportedLanguage::Rust,
-        );
-        let b = parse(
-            "fn baz() {}",
-            SupportedLanguage::Rust,
-        );
+        let a = parse("fn foo() {}\nfn bar() {}", SupportedLanguage::Rust);
+        let b = parse("fn baz() {}", SupportedLanguage::Rust);
         let pairs = vec![
             ("a.rs".to_string(), Some(a), None),
             ("b.rs".to_string(), None, Some(b)),
@@ -458,17 +466,35 @@ use crate::types::{ParserLimits, SupportedLanguage};
 
     #[test]
     fn classify_symbol_entity_covers_all_types() {
-        assert_eq!(classify_symbol_entity("function_item"), Some(EntityType::Function));
-        assert_eq!(classify_symbol_entity("class_declaration"), Some(EntityType::Class));
-        assert_eq!(classify_symbol_entity("let_declaration"), Some(EntityType::Variable));
+        assert_eq!(
+            classify_symbol_entity("function_item"),
+            Some(EntityType::Function)
+        );
+        assert_eq!(
+            classify_symbol_entity("class_declaration"),
+            Some(EntityType::Class)
+        );
+        assert_eq!(
+            classify_symbol_entity("let_declaration"),
+            Some(EntityType::Variable)
+        );
         assert_eq!(classify_symbol_entity("source_file"), None);
     }
 
     #[test]
     fn cross_file_event_display() {
-        assert_eq!(CrossFileEventKind::CrossFileMove.to_string(), "cross_file_move");
-        assert_eq!(CrossFileEventKind::CrossFileRename.to_string(), "cross_file_rename");
-        assert_eq!(CrossFileEventKind::ApiSurfaceChange.to_string(), "api_surface_change");
+        assert_eq!(
+            CrossFileEventKind::CrossFileMove.to_string(),
+            "cross_file_move"
+        );
+        assert_eq!(
+            CrossFileEventKind::CrossFileRename.to_string(),
+            "cross_file_rename"
+        );
+        assert_eq!(
+            CrossFileEventKind::ApiSurfaceChange.to_string(),
+            "api_surface_change"
+        );
     }
 
     #[test]
@@ -476,11 +502,7 @@ use crate::types::{ParserLimits, SupportedLanguage};
         // Symbol exists in same file in both versions — no cross-file event
         let old = parse("fn helper() -> i32 { 42 }", SupportedLanguage::Rust);
         let new = parse("fn helper() -> i32 { 42 }", SupportedLanguage::Rust);
-        let pairs = vec![(
-            "src/lib.rs".to_string(),
-            Some(old),
-            Some(new),
-        )];
+        let pairs = vec![("src/lib.rs".to_string(), Some(old), Some(new))];
         let result = track_cross_file_symbols(&pairs);
         assert!(
             result.cross_file_events.is_empty(),

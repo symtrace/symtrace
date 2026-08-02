@@ -27,13 +27,17 @@ Built on the [symtrace](https://github.com/JashT14/symtrace) CLI engine (Rust).
 
 ## Supported Languages
 
-| Language   | Extensions                      |
-|------------|----------------------------------|
-| Rust       | `.rs`                            |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs`    |
-| TypeScript | `.ts`, `.tsx`                    |
-| Python     | `.py`, `.pyi`                    |
-| Java       | `.java`                          |
+| Language   | Extensions                          |
+|------------|-------------------------------------|
+| **Rust**       | `.rs`                            |
+| **JavaScript** | `.js`, `.jsx`, `.mjs`, `.cjs`    |
+| **TypeScript** | `.ts`, `.tsx`                    |
+| **Python**     | `.py`, `.pyi`                    |
+| **Java**       | `.java`                          |
+| **C**          | `.c`, `.h`                       |
+| **C++**        | `.cpp`, `.hpp`, `.cc`, `.cxx`, `.h++` |
+| **Go**         | `.go`                            |
+| **JSON**       | `.json`, `.jsonc`                |
 
 ## Getting Started
 
@@ -81,6 +85,8 @@ Auto-download supports the following targets:
 |---------|---------|-------------|
 | `symtrace.binaryPath` | `""` | Explicit path to the symtrace binary |
 | `symtrace.logicOnly` | `false` | Ignore comments and whitespace changes |
+| `symtrace.pathGlob` | `""` | Filter changed files matching glob pattern (`--path`) |
+| `symtrace.color` | `"auto"` | Terminal color controls (`auto`, `always`, `never`) |
 | `symtrace.maxFileSize` | `5242880` | Max file size in bytes (5 MiB) |
 | `symtrace.maxAstNodes` | `200000` | Max AST nodes per file |
 | `symtrace.maxRecursionDepth` | `2048` | Max parser recursion depth |
@@ -113,7 +119,7 @@ This produces deterministic, meaningful diffs that understand code structure rat
 ### Architecture
 
 ```
-VS Code Extension (v0.2.0)
+VS Code Extension (v0.3.0)
        │
        ├── extension.ts         ← Activation, command registration
        ├── binary.ts            ← 4-tier binary resolution + GitHub auto-download
@@ -130,6 +136,13 @@ VS Code Extension (v0.2.0)
 ```
 
 ## Release Notes
+
+### 0.3.0
+- Expanded language support to include C (`.c`, `.h`), C++ (`.cpp`, `.hpp`), Go (`.go`), and JSON (`.json`, `.jsonc`)
+- Added `symtrace.pathGlob` configuration setting for path glob pattern filtering (`--path`)
+- Added `symtrace.color` configuration setting for terminal ANSI color controls (`--color`)
+- Updated welcome view and sidebar tree view to display full 9-language matrix
+- Aligned binary resolution and GitHub release download logic with v0.3.0 release assets (`JashT14/symtrace`)
 
 ### 0.2.0
 - Activity bar integration with dedicated Symtrace panel and welcome view

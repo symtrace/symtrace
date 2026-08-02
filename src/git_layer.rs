@@ -1,3 +1,6 @@
+use std::fs;
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use git2::Repository;
 use rayon::prelude::*;
@@ -5,23 +8,27 @@ use rayon::prelude::*;
 use crate::types::{ChangeStatus, FileChange};
 
 /// Lightweight delta metadata collected in the sequential phase,
-/// before parallel blob extraction.
+/// before parallel content extraction.
 struct DeltaInfo {
     path: String,
+    old_path: Option<String>,
+    new_path: Option<String>,
     status: ChangeStatus,
     old_oid: Option<git2::Oid>,
     new_oid: Option<git2::Oid>,
 }
 
-/// Retrieve the list of changed files between two commits, with their contents.
+/// Retrieve the list of changed files between two targets, with their contents.
 ///
-/// Uses a two-phase approach:
-/// 1. Sequential: open repo, compute diff, collect lightweight delta metadata
-/// 2. Parallel: open per-thread repo handles and read blob contents concurrently
+/// Supports diffing between:
+/// 1. Commit A and Commit B
+/// 2. Commit A and Staged Index (if `staged == true`)
+/// 3. Commit A and Working Directory (if `commit_b_ref` is `None` or `"WORKING"`)
 pub fn get_changed_files(
     repo_path: &str,
     commit_a_ref: &str,
-    commit_b_ref: &str,
+    commit_b_ref: Option<&str>,
+    staged: bool,
 ) -> Result<Vec<FileChange>> {
     // ── Phase 1: collect delta metadata (sequential, fast) ───────────
     let deltas = {
@@ -29,19 +36,27 @@ pub fn get_changed_files(
             .with_context(|| format!("Failed to open git repository at '{}'", repo_path))?;
 
         let commit_a = resolve_commit(&repo, commit_a_ref)?;
-        let commit_b = resolve_commit(&repo, commit_b_ref)?;
-
-        let tree_a = commit_a
-            .tree()
-            .context("Failed to get tree for commit A")?;
-        let tree_b = commit_b
-            .tree()
-            .context("Failed to get tree for commit B")?;
+        let tree_a = commit_a.tree().context("Failed to get tree for commit A")?;
 
         let mut diff_opts = git2::DiffOptions::new();
-        let diff = repo
-            .diff_tree_to_tree(Some(&tree_a), Some(&tree_b), Some(&mut diff_opts))
-            .context("Failed to compute diff between commits")?;
+        let diff = if let Some(cb_str) = commit_b_ref {
+            if cb_str.eq_ignore_ascii_case("WORKING") || cb_str.eq_ignore_ascii_case("WORKTREE") {
+                repo.diff_tree_to_workdir_with_index(Some(&tree_a), Some(&mut diff_opts))
+                    .context("Failed to compute diff between commit A and working tree")?
+            } else {
+                let commit_b = resolve_commit(&repo, cb_str)?;
+                let tree_b = commit_b.tree().context("Failed to get tree for commit B")?;
+                repo.diff_tree_to_tree(Some(&tree_a), Some(&tree_b), Some(&mut diff_opts))
+                    .context("Failed to compute diff between commits")?
+            }
+        } else if staged {
+            let index = repo.index().context("Failed to open repository index")?;
+            repo.diff_tree_to_index(Some(&tree_a), Some(&index), Some(&mut diff_opts))
+                .context("Failed to compute diff between commit A and staged index")?
+        } else {
+            repo.diff_tree_to_workdir_with_index(Some(&tree_a), Some(&mut diff_opts))
+                .context("Failed to compute diff between commit A and working tree")?
+        };
 
         let mut deltas = Vec::new();
 
@@ -54,11 +69,18 @@ pub fn get_changed_files(
                 _ => continue,
             };
 
-            let path = delta
+            let old_path = delta
+                .old_file()
+                .path()
+                .map(|p| p.to_string_lossy().to_string());
+            let new_path = delta
                 .new_file()
                 .path()
-                .or_else(|| delta.old_file().path())
-                .map(|p| p.to_string_lossy().to_string())
+                .map(|p| p.to_string_lossy().to_string());
+
+            let path = new_path
+                .clone()
+                .or_else(|| old_path.clone())
                 .unwrap_or_default();
 
             let old_oid = {
@@ -81,6 +103,8 @@ pub fn get_changed_files(
 
             deltas.push(DeltaInfo {
                 path,
+                old_path,
+                new_path,
                 status,
                 old_oid,
                 new_oid,
@@ -88,12 +112,9 @@ pub fn get_changed_files(
         }
 
         deltas
-        // repo, diff, trees, commits all dropped here
     };
 
-    // ── Phase 2: parallel blob extraction ────────────────────────────
-    //    Each rayon task opens its own Repository handle (libgit2 supports
-    //    multiple handles to the same repo from different threads).
+    // ── Phase 2: parallel blob / file extraction ──────────────────────
     let changes: Result<Vec<FileChange>> = deltas
         .par_iter()
         .map(|delta| {
@@ -110,11 +131,25 @@ pub fn get_changed_files(
 
             let new_content = match delta.new_oid {
                 Some(oid) => read_blob_by_oid(&repo, oid)?,
-                None => None,
+                None => {
+                    // Working tree fallback if new_oid is zero (uncommitted working file)
+                    if delta.status != ChangeStatus::Deleted {
+                        let full_file_path = Path::new(repo_path).join(&delta.path);
+                        if full_file_path.is_file() {
+                            fs::read_to_string(&full_file_path).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
             };
 
             Ok(FileChange {
                 path: delta.path.clone(),
+                old_path: delta.old_path.clone(),
+                new_path: delta.new_path.clone(),
                 old_content,
                 new_content,
                 status: delta.status,
