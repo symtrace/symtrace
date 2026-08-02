@@ -1,6 +1,6 @@
 [package]
 name = "symtrace"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A deterministic semantic diff engine using AST-based structural analysis"
 license = "MIT"
@@ -22,6 +22,10 @@ tree-sitter-javascript = "=0.25.0"
 tree-sitter-typescript = "=0.23.2"
 tree-sitter-python = "=0.25.0"
 tree-sitter-java = "=0.23.5"
+tree-sitter-c = "=0.23.4"
+tree-sitter-cpp = "=0.23.4"
+tree-sitter-go = "=0.23.4"
+tree-sitter-json = "=0.24.8"
 blake3 = "=1.8.3"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
@@ -31,6 +35,11 @@ colored = "=2.2.0"
 rayon = "=1.11.0"
 lru = "=0.12.5"
 bumpalo = { version = "=3.20.2", features = ["collections"] }
+globset = "=0.4.15"
+toml = "=0.8.23"
+
+[dev-dependencies]
+proptest = "=1.5.0"
 
 [lints.rust]
 unsafe_code = "deny"

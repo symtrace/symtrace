@@ -2,7 +2,7 @@
   "name": "symtrace-vscode",
   "displayName": "Symtrace for VS Code",
   "description": "Semantic diff viewer powered by symtrace AST analysis",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "JashT14",
   "license": "MIT",
   "repository": {
@@ -69,7 +69,7 @@
     "viewsWelcome": [
       {
         "view": "symtrace.resultsTree",
-        "contents": "Semantic diff powered by AST analysis.\nCompare Git commits to see what changed at the code structure level.\n[Compare Two Commits](command:symtrace.compareTwoCommits)\n[Compare Commit with Parent](command:symtrace.compareWithParent)\n\nSupported: Rust, JavaScript, TypeScript, Python, Java",
+        "contents": "Semantic diff powered by AST analysis.\nCompare Git commits to see what changed at the code structure level.\n[Compare Two Commits](command:symtrace.compareTwoCommits)\n[Compare Commit with Parent](command:symtrace.compareWithParent)\n\nSupported: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, JSON",
         "when": "!symtrace.hasResults"
       }
     ],
@@ -109,6 +109,21 @@
           "type": "boolean",
           "default": false,
           "description": "Ignore comments and whitespace-only changes (--logic-only)."
+        },
+        "symtrace.pathGlob": {
+          "type": "string",
+          "default": "",
+          "description": "Filter changed files matching glob pattern (--path)."
+        },
+        "symtrace.color": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
+          "default": "auto",
+          "description": "Terminal color control (--color)."
         },
         "symtrace.maxFileSize": {
           "type": "number",

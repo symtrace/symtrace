@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use bumpalo::Bump;
 use bumpalo::collections::Vec as BumpVec;
+use bumpalo::Bump;
 use tree_sitter::Parser;
 
 use crate::incremental_parse;
@@ -28,7 +28,7 @@ struct ArenaAstNode<'a> {
 
 impl<'a> ArenaAstNode<'a> {
     /// Convert arena node to owned AstNode (single recursive pass).
-    fn into_owned(&self) -> AstNode {
+    fn to_owned_ast(&self) -> AstNode {
         AstNode {
             id: self.id,
             kind: self.kind.to_string(),
@@ -43,7 +43,7 @@ impl<'a> ArenaAstNode<'a> {
             content_hash: [0u8; 32],
             context_hash: [0u8; 32],
             identity_hash: [0u8; 32],
-            children: self.children.iter().map(|c| c.into_owned()).collect(),
+            children: self.children.iter().map(|c| c.to_owned_ast()).collect(),
             is_named: self.is_named,
         }
     }
@@ -110,7 +110,7 @@ pub fn parse_content_with_tree(
     let mut id_counter = 0u64;
     let arena_ast =
         build_arena_ast_node(&bump, root, content, logic_only, &mut id_counter, limits, 0)?;
-    let mut ast = arena_ast.into_owned();
+    let mut ast = arena_ast.to_owned_ast();
     // Bump allocator dropped here — single deallocation for all construction temporaries
 
     // Compute structural and identity hashes bottom-up
@@ -175,32 +175,37 @@ pub fn parse_content_incremental(
     //    same integer_literal node kind). We use the edit byte region
     //    directly — this precisely identifies all bytes that differ
     //    between old and new content.
-    let changed_ranges: Vec<tree_sitter::Range> = if edit.start_byte < edit.new_end_byte
-        || edit.start_byte < edit.old_end_byte
-    {
-        vec![tree_sitter::Range {
-            start_byte: edit.start_byte,
-            end_byte: edit.new_end_byte.max(edit.start_byte),
-            start_point: edit.start_position,
-            end_point: edit.new_end_position,
-        }]
-    } else {
-        // Identical content — no changed ranges
-        vec![]
-    };
+    let changed_ranges: Vec<tree_sitter::Range> =
+        if edit.start_byte < edit.new_end_byte || edit.start_byte < edit.old_end_byte {
+            vec![tree_sitter::Range {
+                start_byte: edit.start_byte,
+                end_byte: edit.new_end_byte.max(edit.start_byte),
+                start_point: edit.start_position,
+                end_point: edit.new_end_position,
+            }]
+        } else {
+            // Identical content — no changed ranges
+            vec![]
+        };
 
     // ── 5. Build AstNode from incrementally-parsed tree ──────────────
     let root = new_tree.root_node();
     let bump = Bump::new();
     let mut id_counter = 0u64;
-    let arena_ast =
-        build_arena_ast_node(&bump, root, new_content, logic_only, &mut id_counter, limits, 0)?;
-    let mut ast = arena_ast.into_owned();
+    let arena_ast = build_arena_ast_node(
+        &bump,
+        root,
+        new_content,
+        logic_only,
+        &mut id_counter,
+        limits,
+        0,
+    )?;
+    let mut ast = arena_ast.to_owned_ast();
 
     // ── 6. Compute hashes with reuse for unchanged subtrees ──────────
-    let nodes_reused = node_identity::compute_hashes_incremental(
-        &mut ast, old_ast, &changed_ranges, logic_only,
-    );
+    let nodes_reused =
+        node_identity::compute_hashes_incremental(&mut ast, old_ast, &changed_ranges, logic_only);
 
     Ok((ast, new_tree, nodes_reused))
 }
@@ -358,10 +363,7 @@ mod tests {
 
     #[test]
     fn java_root_is_program() {
-        let ast = parse(
-            "class Foo { void bar() {} }",
-            SupportedLanguage::Java,
-        );
+        let ast = parse("class Foo { void bar() {} }", SupportedLanguage::Java);
         assert_eq!(ast.kind, "program");
     }
 
@@ -382,13 +384,19 @@ mod tests {
     #[test]
     fn structural_hash_is_nonzero_after_parse() {
         let ast = parse("fn foo() {}", SupportedLanguage::Rust);
-        assert_ne!(ast.structural_hash, [0u8; 32], "structural hash should not be zero");
+        assert_ne!(
+            ast.structural_hash, [0u8; 32],
+            "structural hash should not be zero"
+        );
     }
 
     #[test]
     fn identity_hash_is_nonzero_after_parse() {
         let ast = parse("fn foo() {}", SupportedLanguage::Rust);
-        assert_ne!(ast.identity_hash, [0u8; 32], "identity hash should not be zero");
+        assert_ne!(
+            ast.identity_hash, [0u8; 32],
+            "identity hash should not be zero"
+        );
     }
 
     // ── Identical sources produce identical hashes ────────────────────
@@ -433,14 +441,11 @@ mod tests {
             "fn foo() {\n    // this is a comment\n    let x = 1;\n}",
             SupportedLanguage::Rust,
         );
-        let without_comment = parse_logic_only(
-            "fn foo() {\n    let x = 1;\n}",
-            SupportedLanguage::Rust,
-        );
+        let without_comment =
+            parse_logic_only("fn foo() {\n    let x = 1;\n}", SupportedLanguage::Rust);
         // Structural hashes should match since comments are ignored.
         assert_eq!(
-            with_comment.structural_hash,
-            without_comment.structural_hash,
+            with_comment.structural_hash, without_comment.structural_hash,
             "logic_only should make comment-only changes hash-equal"
         );
     }
@@ -878,5 +883,33 @@ mod tests {
 
         assert_eq!(inc_ast.structural_hash, full_ast.structural_hash);
         assert_eq!(inc_ast.content_hash, full_ast.content_hash);
+    }
+
+    #[test]
+    fn parse_c_code() {
+        let src = "#include <stdio.h>\nint main() { printf(\"Hello C\\n\"); return 0; }";
+        let ast = parse(src, SupportedLanguage::C);
+        assert!(!ast.children.is_empty());
+    }
+
+    #[test]
+    fn parse_cpp_code() {
+        let src = "#include <iostream>\nclass Foo { public: void bar() { std::cout << \"C++\" << std::endl; } };";
+        let ast = parse(src, SupportedLanguage::Cpp);
+        assert!(!ast.children.is_empty());
+    }
+
+    #[test]
+    fn parse_go_code() {
+        let src = "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"Hello Go\") }";
+        let ast = parse(src, SupportedLanguage::Go);
+        assert!(!ast.children.is_empty());
+    }
+
+    #[test]
+    fn parse_json_code() {
+        let src = "{\n  \"name\": \"symtrace\",\n  \"version\": \"0.3.0\",\n  \"active\": true\n}";
+        let ast = parse(src, SupportedLanguage::Json);
+        assert!(!ast.children.is_empty());
     }
 }

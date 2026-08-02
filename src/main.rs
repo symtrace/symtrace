@@ -2,11 +2,13 @@ mod ast_builder;
 mod ast_cache;
 mod cli;
 mod commit_classification;
+mod config;
 mod git_layer;
 mod incremental_parse;
 mod language;
 mod node_identity;
 mod output;
+mod pager;
 mod refactor_detection;
 mod semantic_similarity;
 mod symbol_tracking;
@@ -19,6 +21,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use globset::Glob;
 use rayon::prelude::*;
 
 use ast_cache::{AstCache, CacheEntry, CacheKey};
@@ -27,15 +30,28 @@ use types::*;
 
 fn main() -> Result<()> {
     let args = cli::Args::parse();
+
+    // ── 0. Check for subcommands (git-diff-driver mode) ───────────────
+    if let Some(cli::Commands::GitDiffDriver {
+        path,
+        old_file,
+        old_hex: _,
+        old_mode: _,
+        new_file,
+        new_hex: _,
+        new_mode: _,
+    }) = &args.command
+    {
+        return run_git_diff_driver(path, old_file, new_file, &args);
+    }
+
     let total_start = Instant::now();
 
     // ── Canonical path enforcement (prevents path spoofing) ──────────
     let canonical_repo = std::fs::canonicalize(&args.repo_path)
         .with_context(|| format!("Failed to resolve repository path: '{}'", args.repo_path))?;
-    // On Windows, strip the \\?\ UNC prefix that canonicalize() adds
     let canonical_repo = strip_unc_prefix(canonical_repo);
 
-    // Validate that the resolved path is a directory
     if !canonical_repo.is_dir() {
         anyhow::bail!(
             "Repository path '{}' is not a directory",
@@ -45,29 +61,105 @@ fn main() -> Result<()> {
 
     let repo_path_str = canonical_repo.to_string_lossy().to_string();
 
-    // ── External cache directory (isolated from the repo tree) ─────
+    // ── Load configuration file (.symtracerc / symtrace.toml) ───────
+    let user_config = config::Config::load(&canonical_repo, args.config.as_deref().map(Path::new));
+
+    // Merge configuration values with CLI flags
+    let logic_only = args.logic_only
+        || user_config
+            .default
+            .as_ref()
+            .and_then(|d| d.logic_only)
+            .unwrap_or(false);
+    let output_json = args.json
+        || user_config
+            .default
+            .as_ref()
+            .and_then(|d| d.json)
+            .unwrap_or(false);
+    let no_incremental = args.no_incremental
+        || user_config
+            .default
+            .as_ref()
+            .and_then(|d| d.no_incremental)
+            .unwrap_or(false);
+    let no_pager = args.no_pager
+        || user_config
+            .default
+            .as_ref()
+            .and_then(|d| d.no_pager)
+            .unwrap_or(false);
+
+    let color_setting = if args.color != "auto" {
+        args.color.clone()
+    } else {
+        user_config
+            .output
+            .as_ref()
+            .and_then(|o| o.color.clone())
+            .unwrap_or_else(|| "auto".to_string())
+    };
+
+    output::configure_color(&color_setting);
+
+    // ── External cache directory ──────────────────────────────────────
     let cache_dir = compute_cache_dir(&canonical_repo);
     let cache = Arc::new(AstCache::new(cache_dir));
-
-    // ── In-memory tree-sitter Tree cache (for incremental parsing) ──
     let tree_cache = Arc::new(TreeCache::new());
 
-    // ── Parser resource limits (configurable via CLI) ──────────────
+    // ── Parser resource limits ───────────────────────────────────────
     let limits = ParserLimits {
-        max_file_size_bytes: args.max_file_size,
-        max_ast_nodes: args.max_ast_nodes,
-        max_recursion_depth: args.max_recursion_depth,
-        parse_timeout_ms: args.parse_timeout_ms,
+        max_file_size_bytes: user_config
+            .limits
+            .as_ref()
+            .and_then(|l| l.max_file_size)
+            .unwrap_or(args.max_file_size),
+        max_ast_nodes: user_config
+            .limits
+            .as_ref()
+            .and_then(|l| l.max_ast_nodes)
+            .unwrap_or(args.max_ast_nodes),
+        max_recursion_depth: user_config
+            .limits
+            .as_ref()
+            .and_then(|l| l.max_recursion_depth)
+            .unwrap_or(args.max_recursion_depth),
+        parse_timeout_ms: user_config
+            .limits
+            .as_ref()
+            .and_then(|l| l.parse_timeout_ms)
+            .unwrap_or(args.parse_timeout_ms),
     };
 
     // ── 1. Git layer: discover changed files ─────────────────────────
-    let changed_files =
-        git_layer::get_changed_files(&repo_path_str, &args.commit_a, &args.commit_b)?;
+    let changed_files = git_layer::get_changed_files(
+        &repo_path_str,
+        &args.commit_a,
+        args.commit_b.as_deref(),
+        args.staged,
+    )?;
+
+    // Apply --path glob filtering if specified
+    let glob_matcher = if let Some(ref pattern) = args.path_glob {
+        Some(Glob::new(pattern)?.compile_matcher())
+    } else {
+        None
+    };
+
+    let changed_files: Vec<_> = changed_files
+        .into_iter()
+        .filter(|fc| {
+            if let Some(ref matcher) = glob_matcher {
+                matcher.is_match(fc.display_path())
+            } else {
+                true
+            }
+        })
+        .collect();
 
     // ── 2. Parse ASTs for each changed file (parallel + cached) ──────
     let parse_start = Instant::now();
 
-    // Filter to supported languages and collect work items
     let work_items: Vec<_> = changed_files
         .iter()
         .filter_map(|fc| {
@@ -76,42 +168,36 @@ fn main() -> Result<()> {
         })
         .collect();
 
-    // ── Blob hash short-circuit + AST cache + parallel parsing ───────
-    //
-    // Each file is processed independently via rayon par_iter.
-    // For each file we:
-    //   1. Check if old_blob_hash == new_blob_hash → skip (unchanged)
-    //   2. Check the AST cache by blob hash → reuse on hit
-    //   3. Parse only on cache miss, then store the result
-    //   4. When an old tree-sitter Tree is available, use incremental
-    //      parsing for the new side (tree reuse optimisation)
     let parsed_results: Vec<_> = work_items
         .par_iter()
         .map(|(file_change, lang)| {
-            // ── Blob hash short-circuit ──────────────────────────
             if ast_cache::blobs_are_identical(
                 file_change.old_blob_hash.as_deref(),
                 file_change.new_blob_hash.as_deref(),
             ) {
-                // File content is identical between commits — no diff needed
-                return (file_change.path.clone(), None, None, 0u64, true, 0u64, false);
+                return (
+                    file_change.path.clone(),
+                    None,
+                    None,
+                    0u64,
+                    true,
+                    0u64,
+                    false,
+                );
             }
 
-            // Parse or retrieve from cache: old side (with tree for reuse)
             let (ast_a, nodes_a, tree_a) = parse_or_cached_with_tree(
                 &cache,
                 &tree_cache,
                 file_change.old_content.as_deref(),
                 file_change.old_blob_hash.as_deref(),
                 *lang,
-                args.logic_only,
+                logic_only,
                 &limits,
             );
 
-            // Parse or retrieve from cache: new side
-            // Try incremental parsing if we have the old tree
             let (ast_b, nodes_b, nodes_reused, was_incremental) = {
-                let try_incremental = !args.no_incremental
+                let try_incremental = !no_incremental
                     && tree_a.is_some()
                     && ast_a.is_some()
                     && file_change.old_content.is_some()
@@ -129,16 +215,16 @@ fn main() -> Result<()> {
                         old_tree,
                         old_ast,
                         *lang,
-                        args.logic_only,
+                        logic_only,
                         &limits,
                     ) {
                         Ok((ast, new_tree, reused)) => {
                             let nc = tree_diff::count_nodes(&ast);
-                            // Cache the new AST and tree
                             if let Some(bh) = file_change.new_blob_hash.as_deref() {
                                 let key = CacheKey {
                                     blob_hash: bh.to_string(),
-                                    logic_only: args.logic_only,
+                                    logic_only,
+                                    limits_hash: limits.compute_limits_hash(),
                                 };
                                 cache.put(
                                     key,
@@ -152,14 +238,13 @@ fn main() -> Result<()> {
                             (Some(ast), nc, reused, true)
                         }
                         Err(_e) => {
-                            // Fallback to full parse
                             let (ast, nodes, _tree) = parse_or_cached_with_tree(
                                 &cache,
                                 &tree_cache,
                                 file_change.new_content.as_deref(),
                                 file_change.new_blob_hash.as_deref(),
                                 *lang,
-                                args.logic_only,
+                                logic_only,
                                 &limits,
                             );
                             (ast, nodes, 0, false)
@@ -172,7 +257,7 @@ fn main() -> Result<()> {
                         file_change.new_content.as_deref(),
                         file_change.new_blob_hash.as_deref(),
                         *lang,
-                        args.logic_only,
+                        logic_only,
                         &limits,
                     );
                     (ast, nodes, 0, false)
@@ -191,7 +276,6 @@ fn main() -> Result<()> {
         })
         .collect();
 
-    // Gather results
     let mut parsed_pairs: Vec<(String, Option<AstNode>, Option<AstNode>)> = Vec::new();
     let mut total_nodes: u64 = 0;
     let mut files_processed: usize = 0;
@@ -220,9 +304,7 @@ fn main() -> Result<()> {
     let file_diffs: Vec<FileDiff> = parsed_pairs
         .par_iter()
         .map(|(path, ast_a, ast_b)| {
-            let operations =
-                tree_diff::compute_diff(ast_a.as_ref(), ast_b.as_ref(), args.logic_only);
-
+            let operations = tree_diff::compute_diff(ast_a.as_ref(), ast_b.as_ref(), logic_only);
             let refactor_patterns =
                 refactor_detection::detect_patterns(&operations, ast_a.as_ref(), ast_b.as_ref());
 
@@ -243,8 +325,7 @@ fn main() -> Result<()> {
     let summary = build_summary(&file_diffs);
 
     // ── 6. Commit classification ─────────────────────────────────────
-    let logic_only_no_changes = if !args.logic_only {
-        // Only re-diff files that actually had operations (skip clean files)
+    let logic_only_no_changes = if !logic_only {
         let files_with_ops: Vec<_> = parsed_pairs
             .iter()
             .zip(file_diffs.iter())
@@ -268,14 +349,15 @@ fn main() -> Result<()> {
         commit_classification::classify_commit(&file_diffs, &summary, logic_only_no_changes);
 
     let total_time = total_start.elapsed();
-
-    // Cache stats for diagnostics
     let (cache_mem, cache_disk) = cache.stats();
 
     let diff_output = DiffOutput {
         repository: repo_path_str.clone(),
         commit_a: args.commit_a.clone(),
-        commit_b: args.commit_b.clone(),
+        commit_b: args
+            .commit_b
+            .clone()
+            .unwrap_or_else(|| "WORKING".to_string()),
         files: file_diffs,
         summary,
         cross_file_tracking: Some(cross_file_tracking),
@@ -291,41 +373,122 @@ fn main() -> Result<()> {
         },
     };
 
-    // ── 7. Output ────────────────────────────────────────────────────
-    if args.json {
-        println!("{}", output::format_json(&diff_output)?);
+    // ── 7. Output with shell pager support ───────────────────────────
+    let mut pager = pager::Pager::setup(no_pager);
+
+    if output_json {
+        let json_str = output::format_json(&diff_output)?;
+        pager.print_output(&json_str)?;
     } else {
-        print!("{}", output::format_cli(&diff_output));
-        // Print performance extras
+        let cli_str = output::format_cli(&diff_output);
+        pager.print_output(&cli_str)?;
+
+        let mut diag = String::new();
         if files_skipped_blob > 0 {
-            eprintln!(
-                "  ⚡ Blob hash short-circuit: {} file(s) skipped (unchanged content)",
+            diag.push_str(&format!(
+                "  ⚡ Blob hash short-circuit: {} file(s) skipped (unchanged content)\n",
                 files_skipped_blob
-            );
+            ));
         }
-        eprintln!(
-            "  📦 AST cache: {} in-memory, {} on-disk entries",
+        diag.push_str(&format!(
+            "  📦 AST cache: {} in-memory, {} on-disk entries\n",
             cache_mem, cache_disk
-        );
-        eprintln!(
-            "  🌲 Tree cache: {} in-memory entries",
+        ));
+        diag.push_str(&format!(
+            "  🌲 Tree cache: {} in-memory entries\n",
             tree_cache.len()
-        );
+        ));
         if total_incremental_parses > 0 {
-            eprintln!(
-                "  🔄 Incremental parsing: {} file(s), {} nodes reused",
+            diag.push_str(&format!(
+                "  🔄 Incremental parsing: {} file(s), {} nodes reused\n",
                 total_incremental_parses, total_nodes_reused
-            );
+            ));
         }
+        pager.print_output(&diag)?;
     }
+
+    pager.finish();
+    Ok(())
+}
+
+/// Run native Git diff driver mode for a single file comparison.
+fn run_git_diff_driver(path: &str, old_file: &str, new_file: &str, args: &cli::Args) -> Result<()> {
+    output::configure_color(&args.color);
+
+    let lang = match language::detect_language(path) {
+        Some(l) => l,
+        None => {
+            // Unsupported language fallback
+            eprintln!("symtrace: unsupported language for file '{}'", path);
+            return Ok(());
+        }
+    };
+
+    let old_content = read_file_content_or_none(old_file);
+    let new_content = read_file_content_or_none(new_file);
+
+    let limits = ParserLimits {
+        max_file_size_bytes: args.max_file_size,
+        max_ast_nodes: args.max_ast_nodes,
+        max_recursion_depth: args.max_recursion_depth,
+        parse_timeout_ms: args.parse_timeout_ms,
+    };
+
+    let ast_a = old_content
+        .as_deref()
+        .and_then(|c| ast_builder::parse_content(c, lang, args.logic_only, &limits).ok());
+    let ast_b = new_content
+        .as_deref()
+        .and_then(|c| ast_builder::parse_content(c, lang, args.logic_only, &limits).ok());
+
+    let operations = tree_diff::compute_diff(ast_a.as_ref(), ast_b.as_ref(), args.logic_only);
+    let refactor_patterns =
+        refactor_detection::detect_patterns(&operations, ast_a.as_ref(), ast_b.as_ref());
+
+    let file_diff = FileDiff {
+        file_path: path.to_string(),
+        operations,
+        refactor_patterns,
+    };
+
+    let summary = build_summary(std::slice::from_ref(&file_diff));
+    let diff_output = DiffOutput {
+        repository: "git-diff-driver".to_string(),
+        commit_a: old_file.to_string(),
+        commit_b: new_file.to_string(),
+        files: vec![file_diff],
+        summary,
+        cross_file_tracking: None,
+        commit_classification: None,
+        performance: PerformanceMetrics {
+            total_files_processed: 1,
+            total_nodes_compared: 0,
+            parse_time_ms: 0.0,
+            diff_time_ms: 0.0,
+            total_time_ms: 0.0,
+            incremental_parses: 0,
+            nodes_reused: 0,
+        },
+    };
+
+    let mut pager = pager::Pager::setup(args.no_pager);
+    if args.json {
+        pager.print_output(&output::format_json(&diff_output)?)?;
+    } else {
+        pager.print_output(&output::format_cli(&diff_output))?;
+    }
+    pager.finish();
 
     Ok(())
 }
 
-/// Parse file content or retrieve from the AST cache.
-/// Also stores/retrieves tree-sitter Trees in the tree cache for
-/// incremental parsing of subsequent versions.
-/// Returns (Option<AstNode>, node_count, Option<Tree>).
+fn read_file_content_or_none(path: &str) -> Option<String> {
+    if path == "." || path == "/dev/null" || path.is_empty() {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
 fn parse_or_cached_with_tree(
     cache: &AstCache,
     tree_cache: &TreeCache,
@@ -340,29 +503,26 @@ fn parse_or_cached_with_tree(
         None => return (None, 0, None),
     };
 
-    // Try AST cache lookup by blob hash
     if let Some(bh) = blob_hash {
         let key = CacheKey {
             blob_hash: bh.to_string(),
             logic_only,
+            limits_hash: limits.compute_limits_hash(),
         };
         if let Some(entry) = cache.get(&key) {
-            // AST cached — also try to get the tree-sitter Tree
             let tree = tree_cache.get(bh);
             return (Some(entry.ast), entry.node_count, tree);
         }
     }
 
-    // Cache miss — full parse with tree
     match ast_builder::parse_content_with_tree(content, lang, logic_only, limits) {
         Ok((ast, tree)) => {
             let node_count = tree_diff::count_nodes(&ast);
-
-            // Store in both caches
             if let Some(bh) = blob_hash {
                 let key = CacheKey {
                     blob_hash: bh.to_string(),
                     logic_only,
+                    limits_hash: limits.compute_limits_hash(),
                 };
                 cache.put(
                     key,
@@ -373,7 +533,6 @@ fn parse_or_cached_with_tree(
                 );
                 tree_cache.put(bh.to_string(), tree.clone());
             }
-
             (Some(ast), node_count, Some(tree))
         }
         Err(e) => {
@@ -408,30 +567,6 @@ fn build_summary(file_diffs: &[FileDiff]) -> DiffSummary {
     summary
 }
 
-// ── Canonical path + cache isolation helpers ─────────────────────────
-
-/// Compute the external cache directory for a repository.
-///
-/// Location: `<cache_base>/symtrace/<blake3(canonical_repo_path)>/`
-///
-/// This isolates each repository's cache into a unique directory outside
-/// the repo tree, preventing cache injection and accidental commits.
-fn compute_cache_dir(canonical_repo: &Path) -> Option<PathBuf> {
-    let path_str = canonical_repo.to_string_lossy();
-    let repo_hash = blake3::hash(path_str.as_bytes());
-    let hex = repo_hash.to_hex();
-
-    let base = cache_base_dir()?;
-    Some(base.join("symtrace").join(hex.as_str()))
-}
-
-/// Determine the platform-appropriate cache base directory.
-///
-/// Resolution order:
-/// 1. `$XDG_CACHE_HOME` (cross-platform, respects user config)
-/// 2. `%LOCALAPPDATA%` (Windows-specific)
-/// 3. `$HOME/.cache` (Unix fallback)
-/// 4. `%USERPROFILE%/.cache` (Windows last resort)
 fn cache_base_dir() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
         if !xdg.is_empty() {
@@ -466,8 +601,15 @@ fn cache_base_dir() -> Option<PathBuf> {
     None
 }
 
-/// Strip the `\\?\` UNC prefix that `std::fs::canonicalize()` adds on Windows.
-/// On non-Windows platforms this is a no-op.
+fn compute_cache_dir(canonical_repo: &Path) -> Option<PathBuf> {
+    let path_str = canonical_repo.to_string_lossy();
+    let repo_hash = blake3::hash(path_str.as_bytes());
+    let hex = repo_hash.to_hex();
+
+    let base = cache_base_dir()?;
+    Some(base.join("symtrace").join(hex.as_str()))
+}
+
 fn strip_unc_prefix(path: PathBuf) -> PathBuf {
     #[cfg(target_os = "windows")]
     {

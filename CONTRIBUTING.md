@@ -1,53 +1,66 @@
-# Contributing to symtrace
+# Contributing to symtrace (v0.3.0)
 
-Thank you for your interest in contributing to symtrace.
+Thank you for your interest in contributing to `symtrace`.
 
 ## Getting Started
 
-1. Fork and clone the repository
-2. Install [Rust](https://www.rust-lang.org/tools/install) (edition 2021+) and a C compiler
+1. Fork and clone the repository (`https://github.com/JashT14/symtrace`)
+2. Install [Rust](https://www.rust-lang.org/tools/install) (edition 2021+) and a C compiler (for libgit2 and tree-sitter C grammars)
 3. Run `cargo build` to verify your setup
-4. Run `cargo test --all` to ensure all tests pass
+4. Run `cargo test --all` to ensure all 166 unit, property-based (`proptest`), and differential tests pass
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, and release configuration.
+
+---
 
 ## Making Changes
 
 1. Create a feature branch from `main`
 2. Make your changes in small, focused commits
-3. Add or update tests for any new functionality
+3. Add or update tests for any new functionality (including property tests in `tests/proptests.rs` or differential tests in `tests/differential_tests.rs` where applicable)
 4. Run the full validation before submitting:
 
 ```bash
-# Format + lint + test + release build
-./build.sh production     # macOS/Linux
+# Format + lint + full test suite + release build
+./build.sh production            # macOS/Linux
 .\build.ps1 -Target production   # Windows
 ```
 
-## Code Standards
+---
+
+## Code & Security Standards
 
 - **Formatting** — all code must pass `cargo fmt --all -- --check`
-- **Linting** — all clippy warnings are errors: `cargo clippy --all-targets --all-features -- -D warnings`
-- **Testing** — all tests must pass: `cargo test --all`
-- **No unsafe** — `unsafe_code = "deny"` is enforced in `Cargo.toml`
-- **Pinned dependencies** — new dependencies must use exact version pinning (`=x.y.z`)
+- **Strict Linting** — all clippy warnings are errors: `cargo clippy --all-targets --all-features -- -D warnings`
+- **Testing** — all 166 unit, property (`proptest`), and differential integration tests must pass (`cargo test --all`)
+- **Zero Unsafe Code** — `unsafe_code = "deny"` is enforced in `Cargo.toml`
+- **Pinned Dependencies** — new dependencies must use exact version pinning (`=x.y.z`)
+- **Language Support** — changes affecting AST parsing must verify compatibility across all 9 supported languages/formats (Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, and JSON)
+
+---
 
 ## Pull Requests
 
-- Keep PRs focused on a single change
+- Keep PRs focused on a single change or feature area
 - Include a clear description of what changed and why
-- Reference any related issues
-- Ensure CI checks pass before requesting review
+- Reference any related issue numbers
+- Ensure all CI checks (format, clippy, test suite, security provenance) pass cleanly before requesting review
+
+---
 
 ## Reporting Issues
 
 - Use GitHub Issues for bug reports and feature requests
 - Include steps to reproduce for bugs
-- Include the output of `symtrace --version` and your OS
+- Include the output of `symtrace --version` and your operating system / environment details
+
+---
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for security policy and vulnerability reporting.
+See [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT_V0.3.0.md](SECURITY_AUDIT_V0.3.0.md) for security policies, audit details, and vulnerability reporting.
+
+---
 
 ## License
 

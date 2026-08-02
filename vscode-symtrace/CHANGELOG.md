@@ -2,6 +2,14 @@
 
 All notable changes to the "symtrace-vscode" extension will be documented in this file.
 
+## [0.3.0] - 2026-08-02
+
+### Added
+- Expanded language support in VS Code: C, C++, Go, and JSON (`.c`, `.h`, `.cpp`, `.hpp`, `.go`, `.json`).
+- Added extension settings for `--path` glob filtering (`symtrace.pathGlob`) and `--color` terminal settings (`symtrace.color`).
+- Improved welcome view with updated language matrix.
+- Updated compatibility with Symtrace core engine v0.3.0.
+
 ## [0.2.0] - 2026-03-20
 
 ### Added

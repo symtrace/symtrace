@@ -23,6 +23,7 @@ const MAX_DESERIALIZATION_BYTES: u64 = 20_971_520;
 pub struct CacheKey {
     pub blob_hash: String,
     pub logic_only: bool,
+    pub limits_hash: u64,
 }
 
 /// Stored payload for a cached AST entry.
@@ -124,8 +125,7 @@ impl AstCache {
                                 return None;
                             }
                             // Promote to in-memory cache
-                            let mut mem =
-                                self.memory.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
                             mem.put(key.clone(), envelope.payload.clone());
                             return Some(envelope.payload);
                         }

@@ -44,12 +44,8 @@ pub fn detect_patterns(
 ) -> Vec<RefactorPattern> {
     let mut patterns = Vec::new();
 
-    let old_nodes = old_ast
-        .map(|a| collect_function_nodes(a))
-        .unwrap_or_default();
-    let new_nodes = new_ast
-        .map(|a| collect_function_nodes(a))
-        .unwrap_or_default();
+    let old_nodes = old_ast.map(collect_function_nodes).unwrap_or_default();
+    let new_nodes = new_ast.map(collect_function_nodes).unwrap_or_default();
 
     // ── 1. Extract-method detection ──────────────────────────────────
     patterns.extend(detect_extract_method(ops, &old_nodes, &new_nodes));
@@ -192,10 +188,7 @@ fn detect_rename_variable(
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn is_function_entity(op: &OperationRecord) -> bool {
-    matches!(
-        op.entity_type,
-        crate::types::EntityType::Function
-    )
+    matches!(op.entity_type, crate::types::EntityType::Function)
 }
 
 /// Extract the name between single quotes in a detail string like
@@ -286,7 +279,7 @@ fn extract_ast_name(node: &AstNode) -> String {
 mod tests {
     use super::*;
     use crate::ast_builder::parse_content;
-use crate::types::{EntityType, OperationType, ParserLimits, SupportedLanguage};
+    use crate::types::{EntityType, OperationType, ParserLimits, SupportedLanguage};
     fn parse(src: &str, lang: SupportedLanguage) -> AstNode {
         parse_content(src, lang, false, &ParserLimits::default()).expect("parse failed")
     }
@@ -323,11 +316,19 @@ use crate::types::{EntityType, OperationType, ParserLimits, SupportedLanguage};
             EntityType::Function,
             "function_item renamed from 'old_name' to 'new_name'",
         )];
-        let a = parse("fn old_name(x: i32) -> i32 { x + 1 }", SupportedLanguage::Rust);
-        let b = parse("fn new_name(x: i32) -> i32 { x + 1 }", SupportedLanguage::Rust);
+        let a = parse(
+            "fn old_name(x: i32) -> i32 { x + 1 }",
+            SupportedLanguage::Rust,
+        );
+        let b = parse(
+            "fn new_name(x: i32) -> i32 { x + 1 }",
+            SupportedLanguage::Rust,
+        );
         let patterns = detect_patterns(&ops, Some(&a), Some(&b));
         assert!(
-            patterns.iter().any(|p| p.kind == RefactorKind::RenameVariable),
+            patterns
+                .iter()
+                .any(|p| p.kind == RefactorKind::RenameVariable),
             "expected RenameVariable pattern, got: {patterns:?}"
         );
     }

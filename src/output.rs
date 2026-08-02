@@ -3,6 +3,19 @@ use colored::Colorize;
 
 use crate::types::{DiffOutput, OperationType};
 
+/// Configure colored output based on CLI setting and NO_COLOR env var.
+pub fn configure_color(color_setting: &str) {
+    if std::env::var("NO_COLOR").is_ok() {
+        colored::control::set_override(false);
+        return;
+    }
+    match color_setting.to_lowercase().as_str() {
+        "always" | "yes" | "true" => colored::control::set_override(true),
+        "never" | "no" | "false" => colored::control::set_override(false),
+        _ => {} // default auto detection by colored crate
+    }
+}
+
 /// Serialize DiffOutput to pretty-printed JSON.
 pub fn format_json(output: &DiffOutput) -> Result<String> {
     serde_json::to_string_pretty(output).context("Failed to serialize output to JSON")
@@ -13,14 +26,8 @@ pub fn format_cli(output: &DiffOutput) -> String {
     let mut buf = String::new();
 
     // ── Header ───────────────────────────────────────────────────────
-    buf.push_str(&format!(
-        "{}\n",
-        "━━━ SymTrace  Semantic Diff ━━━".bold()
-    ));
-    buf.push_str(&format!(
-        "Repository : {}\n",
-        output.repository.cyan()
-    ));
+    buf.push_str(&format!("{}\n", "━━━ SymTrace  Semantic Diff ━━━".bold()));
+    buf.push_str(&format!("Repository : {}\n", output.repository.cyan()));
     buf.push_str(&format!(
         "Comparing  : {} → {}\n\n",
         output.commit_a.yellow(),
@@ -71,8 +78,7 @@ pub fn format_cli(output: &DiffOutput) -> String {
             if let Some(ref sim) = op.similarity {
                 buf.push_str(&format!(
                     " [{:.0}% similarity, {}]",
-                    sim.similarity_percent,
-                    sim.change_intensity
+                    sim.similarity_percent, sim.change_intensity
                 ));
             }
             buf.push('\n');
@@ -80,10 +86,7 @@ pub fn format_cli(output: &DiffOutput) -> String {
 
         // ── Refactor patterns ────────────────────────────────────────
         if !file.refactor_patterns.is_empty() {
-            buf.push_str(&format!(
-                "  {}\n",
-                "── Refactor Patterns ──".dimmed()
-            ));
+            buf.push_str(&format!("  {}\n", "── Refactor Patterns ──".dimmed()));
             for pattern in &file.refactor_patterns {
                 buf.push_str(&format!(
                     "    {} {} (confidence: {:.0}%)\n",
@@ -103,22 +106,10 @@ pub fn format_cli(output: &DiffOutput) -> String {
         "  Files          : {}\n",
         output.summary.total_files
     ));
-    buf.push_str(&format!(
-        "  Moves          : {}\n",
-        output.summary.moves
-    ));
-    buf.push_str(&format!(
-        "  Renames        : {}\n",
-        output.summary.renames
-    ));
-    buf.push_str(&format!(
-        "  Inserts        : {}\n",
-        output.summary.inserts
-    ));
-    buf.push_str(&format!(
-        "  Deletes        : {}\n",
-        output.summary.deletes
-    ));
+    buf.push_str(&format!("  Moves          : {}\n", output.summary.moves));
+    buf.push_str(&format!("  Renames        : {}\n", output.summary.renames));
+    buf.push_str(&format!("  Inserts        : {}\n", output.summary.inserts));
+    buf.push_str(&format!("  Deletes        : {}\n", output.summary.deletes));
     buf.push_str(&format!(
         "  Modifications  : {}\n",
         output.summary.modifications
@@ -130,28 +121,15 @@ pub fn format_cli(output: &DiffOutput) -> String {
             "\n{}\n",
             "━━━ Cross-File Symbol Tracking ━━━".bold()
         ));
-        buf.push_str(&format!(
-            "  Symbols tracked : {}\n",
-            tracking.symbol_count
-        ));
+        buf.push_str(&format!("  Symbols tracked : {}\n", tracking.symbol_count));
         if tracking.cross_file_events.is_empty() {
-            buf.push_str(
-                &"  (no cross-file events detected)\n"
-                    .dimmed()
-                    .to_string(),
-            );
+            buf.push_str(&"  (no cross-file events detected)\n".dimmed().to_string());
         } else {
             for event in &tracking.cross_file_events {
                 let symbol = match event.event {
-                    crate::types::CrossFileEventKind::CrossFileMove => {
-                        "↔".blue().to_string()
-                    }
-                    crate::types::CrossFileEventKind::CrossFileRename => {
-                        "✎".yellow().to_string()
-                    }
-                    crate::types::CrossFileEventKind::ApiSurfaceChange => {
-                        "⚠".red().to_string()
-                    }
+                    crate::types::CrossFileEventKind::CrossFileMove => "↔".blue().to_string(),
+                    crate::types::CrossFileEventKind::CrossFileRename => "✎".yellow().to_string(),
+                    crate::types::CrossFileEventKind::ApiSurfaceChange => "⚠".red().to_string(),
                 };
                 buf.push_str(&format!(
                     "  {} [{}] {} (similarity: {:.0}%)\n",
@@ -166,10 +144,7 @@ pub fn format_cli(output: &DiffOutput) -> String {
 
     // ── Commit Classification ────────────────────────────────────────
     if let Some(ref classification) = output.commit_classification {
-        buf.push_str(&format!(
-            "\n{}\n",
-            "━━━ Commit Classification ━━━".bold()
-        ));
+        buf.push_str(&format!("\n{}\n", "━━━ Commit Classification ━━━".bold()));
         buf.push_str(&format!(
             "  Class          : {}\n",
             classification.primary_class.to_string().bold().cyan()
@@ -205,8 +180,7 @@ pub fn format_cli(output: &DiffOutput) -> String {
     if output.performance.incremental_parses > 0 {
         buf.push_str(&format!(
             "  Incremental       : {} file(s), {} nodes reused\n",
-            output.performance.incremental_parses,
-            output.performance.nodes_reused
+            output.performance.incremental_parses, output.performance.nodes_reused
         ));
     }
 
