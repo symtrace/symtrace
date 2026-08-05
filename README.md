@@ -289,6 +289,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 ## License
 
 [MIT License](LICENSE) © 2026 Jash Thakkar.
-
-This OSS is maintained under OSS Act, under MIT License.
-Any violation of this act will be met with legal actions.
