@@ -8,20 +8,46 @@ A **deterministic semantic diff engine** written in Rust that compares Git commi
 
 Where `git diff` shows you *lines that changed*, `symtrace` shows you *what semantically changed* — functions moved, classes deleted, variables renamed, code blocks inserted — at the AST node level, with no false positives from formatting or comment edits.
 
-```
-━━━ src/handler.rs
-  + [INSERT] function_item 'handle_request' inserted (L42)
-  ~ [MODIFY] function_item 'parse_body' modified (L10 → L10) [75% similarity, medium]
-  ✎ [RENAME] function_item renamed from 'process' to 'execute' (L5 → L5) [98% similarity, low]
-  - [DELETE] function_item 'deprecated_fn' deleted (L88)
-  ↔ [MOVE]   function_item 'helper' moved (L20 → L35) [100% similarity, low]
-  ── Refactor Patterns ──
-    ▸ 'process' renamed to 'execute' (confidence: 100%)
+### Example: Traditional `git diff` vs. `symtrace`
+
+When moving a function and renaming a variable inside it:
+
+**Traditional `git diff` (Line-based deletion & insertion):**
+
+```diff
+- fn process_user(id: u64) -> User {
+-     let user = fetch_user(id);
+-     user
+- }
+...
++ fn process_user(user_id: u64) -> User {
++     let account = fetch_user(user_id);
++     account
++ }
 ```
 
----
+**`symtrace` (AST-based semantic understanding):**
+
+```
+━━━ src/user.rs
+  ✎ [RENAME] variable 'user' renamed to 'account' (L12 → L85) [95% similarity, low]
+  ↔ [MOVE]   function_item 'process_user' moved (L10 → L83) [100% similarity, low]
+  ── Refactor Patterns ──
+    ▸ Variable renamed 'user' ➔ 'account' inside 'process_user' (confidence: 100%)
+```
 
 ## Features (v0.3.0)
+
+### Key Highlights (Beginner-Friendly)
+
+- **Understands Code Structure** — Sees true code changes like moved functions or renamed variables without getting confused by formatting tweaks or comment updates.
+- **Multi-Language Support** — Works seamlessly across 9 popular languages/formats: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, and JSON.
+- **Plugs Right Into Git** — Integrates directly with your existing Git workflow as a drop-in `git diff` replacement.
+- **Detects Refactoring Patterns** — Automatically identifies structural refactors (like function extraction or renames) and categorizes commit types.
+- **Blazing Fast & Offline** — Built in high-performance Rust with intelligent caching, operating entirely locally with zero network calls.
+- **Automation Ready** — Produces structured JSON output for easy integration into CI/CD pipelines and custom tools.
+
+### Technical Specifications
 
 - **Semantic Operations** — MOVE, RENAME, MODIFY, INSERT, DELETE detected at the AST node level
 - **Expanded Language Support** — 9 first-class languages/formats: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, and JSON
@@ -41,23 +67,19 @@ Where `git diff` shows you *lines that changed*, `symtrace` shows you *what sema
 - **Rigorous Quality & Testing** — Property-based testing (`proptest`), differential testing, fuzzing (`cargo-fuzz`), and 166 passing tests
 - **Security & Provenance** — Safe Rust enforced (`unsafe_code = "deny"`), keyless Cosign OIDC signing, SPDX SBOM, and GitHub Artifact Attestations
 
----
-
 ## Supported Languages
 
-| Language   | Extensions                          | Key Entity Identifiers |
-|------------|-------------------------------------|------------------------|
-| **Rust**       | `.rs`                               | `function_item`, `struct_item`, `enum_item`, `impl_item`, `trait_item` |
-| **JavaScript** | `.js`, `.jsx`, `.mjs`, `.cjs`       | `function_declaration`, `class_declaration`, `method_definition` |
-| **TypeScript** | `.ts`, `.tsx`                       | `function_declaration`, `class_declaration`, `interface_declaration`, `type_alias_declaration` |
-| **Python**     | `.py`, `.pyi`                       | `function_definition`, `class_definition` |
-| **Java**       | `.java`                             | `method_declaration`, `class_declaration`, `interface_declaration` |
-| **C**          | `.c`, `.h`                          | `function_definition`, `struct_specifier`, `enum_specifier`, `type_definition` |
-| **C++**        | `.cpp`, `.hpp`, `.cc`, `.cxx`, `.h++` | `function_definition`, `class_specifier`, `namespace_definition`, `template_declaration` |
-| **Go**         | `.go`                               | `function_declaration`, `method_declaration`, `type_declaration`, `type_spec` |
-| **JSON**       | `.json`, `.jsonc`                   | `pair`, `object`, `array` |
-
----
+| Language | Extensions | Key Entity Identifiers |
+| ------------ | ------------------------------------- | ------------------------ |
+| **Rust** | `.rs` | `function_item`, `struct_item`, `enum_item`, `impl_item`, `trait_item` |
+| **JavaScript** | `.js`, `.jsx`, `.mjs`, `.cjs` | `function_declaration`, `class_declaration`, `method_definition` |
+| **TypeScript** | `.ts`, `.tsx` | `function_declaration`, `class_declaration`, `interface_declaration`, `type_alias_declaration` |
+| **Python** | `.py`, `.pyi` | `function_definition`, `class_definition` |
+| **Java** | `.java` | `method_declaration`, `class_declaration`, `interface_declaration` |
+| **C** | `.c`, `.h` | `function_definition`, `struct_specifier`, `enum_specifier`, `type_definition` |
+| **C++** | `.cpp`, `.hpp`, `.cc`, `.cxx`, `.h++` | `function_definition`, `class_specifier`, `namespace_definition`, `template_declaration` |
+| **Go** | `.go` | `function_declaration`, `method_declaration`, `type_declaration`, `type_spec` |
+| **JSON** | `.json`, `.jsonc` | `pair`, `object`, `array` |
 
 ## Quick Start
 
@@ -84,62 +106,19 @@ symtrace . HEAD~1 HEAD --json
 symtrace . HEAD~1 HEAD --logic-only
 ```
 
----
-
 ## Installation
 
-### Standalone Installers (Recommended)
+### Linux / macOS (Shell Script)
 
-#### Linux / macOS (Shell Script)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JashT14/symtrace/main/install.sh | bash
 ```
 
-#### Windows (PowerShell Script)
+### Windows (PowerShell Script)
+
 ```powershell
 iwr -useb https://raw.githubusercontent.com/JashT14/symtrace/main/install.ps1 | iex
 ```
-
----
-
-### Package Managers
-
-#### macOS (Homebrew)
-```bash
-brew tap JashT14/symtrace
-brew install symtrace
-```
-
-#### Windows (WinGet / Scoop)
-```powershell
-# WinGet
-winget install SymTrace.SymTrace
-
-# Scoop
-scoop bucket add symtrace https://github.com/JashT14/scoop-symtrace
-scoop install symtrace
-```
-
-#### Linux (`.deb` / `.rpm`)
-```bash
-# Debian / Ubuntu
-wget https://github.com/JashT14/symtrace/releases/download/v0.3.0/symtrace_0.3.0_amd64.deb
-sudo dpkg -i symtrace_0.3.0_amd64.deb
-
-# Fedora / RHEL / CentOS
-sudo rpm -i https://github.com/JashT14/symtrace/releases/download/v0.3.0/symtrace-0.3.0-1.x86_64.rpm
-```
-
-#### Cargo (Pre-built binary / Source)
-```bash
-# Fast pre-built binary install
-cargo binstall symtrace
-
-# Direct build from source
-cargo install symtrace
-```
-
----
 
 ## Usage & Configuration
 
@@ -158,7 +137,7 @@ symtrace [REPO_PATH] [COMMIT_A] [COMMIT_B] [OPTIONS]
 ### Options
 
 | Flag | Short | Default | Description |
-|------|-------|---------|-------------|
+| ------ | ------- | --------- | ------------- |
 | `--staged` / `--cached` | | off | Compare staged index against `COMMIT_A` |
 | `--path <GLOB>` | `-p` | | Filter files using path glob pattern (e.g. `"src/**/*.rs"`) |
 | `--color <WHEN>` | | `auto` | Terminal color controls (`auto`, `always`, `never`) |
@@ -173,11 +152,10 @@ symtrace [REPO_PATH] [COMMIT_A] [COMMIT_B] [OPTIONS]
 | `--help` | `-h` | | Print help |
 | `--version` | `-V` | | Print version |
 
----
-
 ### Subcommands
 
 #### Native Git Diff Driver (`git-diff-driver`)
+
 Configure `symtrace` as a native `git diff` driver for specific file types or entire repositories:
 
 ```bash
@@ -191,13 +169,12 @@ echo "*.js diff=symtrace" >> .gitattributes
 
 Now running standard `git diff` automatically renders semantic AST diffs.
 
----
-
 ### Configuration File (`.symtracerc` / `symtrace.toml`)
 
 `symtrace` automatically loads configuration from repository root `.symtracerc` or `symtrace.toml`, or user home config (`~/.config/symtrace/symtrace.toml`). Precedence order: **CLI Flags > Repository Config > User Config > Defaults**.
 
 Sample configuration file:
+
 ```toml
 [default]
 logic_only = false
@@ -214,28 +191,6 @@ parse_timeout_ms = 3000
 [output]
 color = "auto"
 ```
-
----
-
-## VS Code Extension (v0.3.0)
-
-**[Symtrace for VS Code](vscode-symtrace/)** brings semantic diff analysis directly into your editor with full v0.3.0 language support, setting controls, and interactive webview reports.
-
-### Highlights
-- **Interactive commit picker** — Select commits from your Git history via QuickPick
-- **Side-by-side diff views** — Click any operation to see old vs new file content
-- **Inline editor decorations** — Annotate semantic operations directly in the gutter
-- **Full webview report** — Collapsible file cards with similarity bars and refactor cards
-- **Auto-download** — 4-tier binary resolution (config path → PATH → cached → GitHub releases)
-
-Install from VS Code Marketplace or build locally:
-```bash
-cd vscode-symtrace
-npm install && npm run build
-npx @vscode/vsce package
-```
-
----
 
 ## How It Works
 
@@ -255,7 +210,7 @@ Repository Target Resolution ──► Dual-Path Git File Changes ──► Path
 ### Architecture Overview
 
 | Module | Responsibility |
-|--------|----------------|
+| -------- | ---------------- |
 | `main.rs` | Pipeline orchestration, target resolution, subcommand handling, timing |
 | `cli.rs` | CLI argument definitions (`clap`), positional defaults, flags |
 | `git_layer.rs` | Repository access (`libgit2`), dual-path rename extraction, index/workdir diffs |
@@ -274,21 +229,17 @@ Repository Target Resolution ──► Dual-Path Git File Changes ──► Path
 | `output.rs` | ANSI color renderer and structured JSON formatter |
 | `types.rs` | Shared domain data structures and `FileChange` dual-path representations |
 
----
-
 ## Performance & Empirical Benchmarks
 
 Tested on a release build (`LLVM -O3`, LTO enabled) against the local `express` repository (`d:\rust_playground\express`):
 
 | Scenario | Mode / Command | Processed Files | AST Nodes | Parse Time | Diff Time | Total Time | Speedup Factor |
-|:---|:---|:---|:---|:---|:---|:---|:---|
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Cold AST Parse** | `symtrace express HEAD~1 HEAD` (Cold) | 2 | 6,011 | 32.21 ms | 0.94 ms | 86.77 ms | Baseline |
 | **Warm Cache Hit** | `symtrace express HEAD~1 HEAD` (Warm) | 2 | 6,011 | 3.77 ms | 1.24 ms | 22.21 ms | **3.91× faster** |
 | **JSON Output** | `symtrace express HEAD~1 HEAD --json` | 2 | 6,011 | 3.66 ms | 1.00 ms | 18.38 ms | **4.72× faster** |
-| **Working Tree Diff**| `symtrace express HEAD` (Single Commit)| 0 | 0 | 0.01 ms | 0.00 ms | 142.88 ms| N/A |
+| **Working Tree Diff** | `symtrace express HEAD` (Single Commit) | 0 | 0 | 0.01 ms | 0.00 ms | 142.88 ms | N/A |
 | **Full Test Suite** | `cargo test --all` (166 tests) | N/A | ~65,000 | N/A | N/A | **90.00 ms** (0.09s) | **166 tests / 90ms** |
-
----
 
 ## Security & Supply Chain
 
@@ -299,14 +250,12 @@ Tested on a release build (`LLVM -O3`, LTO enabled) against the local `express` 
 - **Resource Limits & Fuzzing** — Hard bounds on file size, node count, recursion depth, and parse timeouts fuzzed via `cargo-fuzz`.
 - **Cosign & Provenance** — Release assets signed keylessly via Sigstore/Cosign OIDC with SPDX SBOM (`symtrace.spdx.json`) and GitHub Artifact Attestations.
 
-See [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT_V0.3.0.md](SECURITY_AUDIT_V0.3.0.md) for full security documentation.
-
----
+See [SECURITY.md](SECURITY.md) for full security documentation.
 
 ## Dependencies
 
 | Crate | Version | Purpose |
-|-------|---------|---------|
+| ------- | --------- | --------- |
 | `clap` | `=4.5.60` | CLI argument parsing |
 | `git2` | `=0.19.0` | libgit2 bindings for Git repository access |
 | `tree-sitter` | `=0.25.10` | Parser framework |
@@ -333,29 +282,13 @@ See [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT_V0.3.0.md](SECURITY_AUDIT_V0.
 
 All dependencies are strictly pinned (`=x.y.z`). See [Cargo.toml](Cargo.toml) for details.
 
----
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
----
-
 ## License
 
-[MIT License](LICENSE) © 2026 Symtrace Maintainers.
-`rayon` | Data parallelism |
-| `lru` | In-memory LRU cache |
-| `bumpalo` | Arena allocator |
-| `colored` | Terminal colors |
-| `anyhow` | Error handling |
+[MIT License](LICENSE) © 2026 Jash Thakkar.
 
-All versions are exactly pinned. See [Cargo.toml](Cargo.toml) for specifics.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-[MIT](LICENSE)
+This OSS is maintained under OSS Act, under MIT License.
+Any violation of this act will be met with legal actions.
