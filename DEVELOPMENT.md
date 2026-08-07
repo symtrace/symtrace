@@ -1,6 +1,6 @@
-# Development Guide — Symtrace v0.3.0
+# Development Guide — Symtrace v0.4.0
 
-This document describes the production-ready build, quality verification, and release development workflow for `symtrace` v0.3.0.
+This document describes the production-ready build, quality verification, and release development workflow for `symtrace` v0.4.0.
 
 ## Build System
 
@@ -11,6 +11,7 @@ The project is configured for **maximum portability** and **production quality**
 Three ways to build, all with identical targets and no system-specific hardcoding:
 
 #### 1. **Windows (PowerShell)**
+
 ```powershell
 .\build.ps1 -Target production    # Full production build
 .\build.ps1 -Target release       # Release binary only
@@ -21,6 +22,7 @@ Three ways to build, all with identical targets and no system-specific hardcodin
 ```
 
 #### 2. **macOS / Linux (Bash)**
+
 ```bash
 ./build.sh production    # Full production build
 ./build.sh release       # Release binary only
@@ -31,6 +33,7 @@ Three ways to build, all with identical targets and no system-specific hardcodin
 ```
 
 #### 3. **Direct Cargo** (all platforms)
+
 ```bash
 cargo build                    # Debug build
 cargo build --release         # Release build (optimized)
@@ -43,6 +46,7 @@ cargo install --path .        # Install binary globally
 ### GNU Make (optional)
 
 If `make` is installed on your system (Linux/macOS):
+
 ```bash
 make release      # Make targets are identical to build scripts
 make test
@@ -50,8 +54,6 @@ make lint
 make production
 make help         # Show all targets
 ```
-
----
 
 ## Production Build
 
@@ -71,6 +73,7 @@ cargo clean && cargo fmt --all -- --check && \
 ```
 
 This runs:
+
 1. ✓ Clean build directory
 2. ✓ Format check (`rustfmt`)
 3. ✓ Linter (`clippy` with warnings-as-errors)
@@ -80,6 +83,7 @@ This runs:
 ### Binary Location
 
 After a successful build, the binary is located at:
+
 - **Windows:** `target\release\symtrace.exe`
 - **macOS/Linux:** `target/release/symtrace`
 
@@ -88,7 +92,7 @@ After a successful build, the binary is located at:
 All release builds use production-optimized settings from `.cargo/config.toml`:
 
 | Setting | Value | Purpose |
-|---------|-------|---------|
+| --------- | ------- | --------- |
 | `opt-level` | 3 | Maximum optimization (LLVM -O3) |
 | `lto` | true | Link-Time Optimization |
 | `codegen-units` | 1 | Single codegen unit (slower compile, faster binary) |
@@ -98,11 +102,9 @@ All release builds use production-optimized settings from `.cargo/config.toml`:
 
 Result: Fast, small, production-grade binary with minimal runtime overhead.
 
----
-
 ## Code Quality & Testing Suite Architecture
 
-`symtrace` v0.3.0 enforces a strict four-tier verification architecture:
+`symtrace` v0.4.0 enforces a strict four-tier verification architecture:
 
 ```
 1. Unit Tests (156 passing)       ──► Validate parser, diff engine, limits, config, and pagers
@@ -112,54 +114,66 @@ Result: Fast, small, production-grade binary with minimal runtime overhead.
 ```
 
 ### 1. Pre-commit Checks
+
 Run before committing:
+
 ```bash
 ./build.sh production   # Linux/macOS
 .\build.ps1 -Target production # Windows
 ```
 
 ### 2. Code Formatting
+
 All code **must** be formatted with `rustfmt`:
+
 ```bash
 cargo fmt --all -- --check
 ```
 
 ### 3. Strict Linting (`clippy`)
+
 All clippy warnings are treated as errors (`unsafe_code = "deny"` enforced):
+
 ```bash
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ### 4. Comprehensive Testing
+
 Run the complete 166-test suite:
+
 ```bash
 cargo test --all
 ```
 
 #### Property-Based Testing (`proptest`)
+
 Runs randomized property tests verifying AST node structural hash invariance, diff symmetry, and determinism:
+
 ```bash
 cargo test --test proptests
 ```
 
 #### Differential Testing
+
 Validates formatting-only and cross-file symbol migration scenarios across Rust, JavaScript, Python, C, and Go:
+
 ```bash
 cargo test --test differential_tests
 ```
 
 #### Fuzzing Targets (`cargo-fuzz`)
+
 Fuzz parsing limits under arbitrary byte inputs:
+
 ```bash
 cargo fuzz run parse_limits
 ```
 
----
-
 ## Dependency Management
 
 | Crate | Version | Purpose |
-|-------|---------|---------|
+| ------- | --------- | --------- |
 | `clap` | `=4.5.60` | CLI argument parsing |
 | `git2` | `=0.19.0` | libgit2 bindings for Git repository access |
 | `tree-sitter` | `=0.25.10` | Parser framework |
@@ -186,8 +200,6 @@ cargo fuzz run parse_limits
 
 All versions are exactly pinned (`=x.y.z`) in `Cargo.toml`. `Cargo.lock` is committed for 100% reproducible builds.
 
----
-
 ## Installation for Development
 
 ```bash
@@ -208,13 +220,12 @@ cargo install --path .
 
 The binary is now available as `symtrace` from any terminal.
 
----
-
 ## Automation, Security & Release Distribution
 
 ### CI/CD Release Pipeline (`.github/workflows/release.yml`)
 
 The automated release workflow triggers on git tag push (`v*`):
+
 1. **GitHub Free Tier Runner Optimization**: Restricted to `ubuntu-latest` and `windows-latest` standard runners (execution time < 4 min per release).
 2. **Multi-Platform Build Matrix**: Builds Linux (`x86_64`, `aarch64`) tarballs and Windows (`x86_64`) zip archives.
 3. **Automated Cryptographic Provenance**:
@@ -229,32 +240,34 @@ The automated release workflow triggers on git tag push (`v*`):
 - `install.sh`: POSIX shell installer for Linux/macOS installing binary into `~/.local/bin`.
 - `install.ps1`: PowerShell installer for Windows installing binary into `%LOCALAPPDATA%\symtrace\bin` and updating `PATH`.
 
----
-
 ## Troubleshooting
 
 ### Build Failures
+
 1. **Missing C compiler:** Install a C compiler (MSVC / Build Tools on Windows, GCC/Clang on Linux/macOS).
 2. **libgit2 build errors:** Ensure active internet connection for first-time crate downloads.
 3. **Disk space:** Release builds require temporary target space; run `cargo clean` to reclaim disk space.
 
 ### Test Failures
+
 Run tests with verbose backtraces:
+
 ```bash
 RUST_BACKTRACE=1 cargo test --all -- --nocapture
 ```
 
 ### Lint Failures
+
 Check explicit clippy diagnostics:
+
 ```bash
 cargo clippy --all-targets --all-features --message-format=short
 ```
 
----
-
 ## System Independence
 
 All build configuration is portable:
+
 - ✓ No hardcoded local paths
 - ✓ Portable configuration in `.cargo/config.toml`
 - ✓ Environment-independent (except optional `RUST_BACKTRACE`)

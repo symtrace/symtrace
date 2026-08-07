@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
 
-interface CommitInfo {
+export interface CommitInfo {
   hash: string;
   shortHash: string;
   subject: string;
@@ -14,40 +14,97 @@ export interface CommitPair {
   commitB: string;
 }
 
+const DELIMITER = "<SYMTRACE_SPLIT>";
+
 export async function pickTwoCommits(
   repoPath: string
 ): Promise<CommitPair | undefined> {
   const commits = await getRecentCommits(repoPath, 50);
-  if (commits.length < 2) {
-    vscode.window.showWarningMessage("Not enough commits in this repository.");
+
+  type OptionItem = vscode.QuickPickItem & {
+    action?: "worktree" | "staged" | "commit";
+    commit?: CommitInfo;
+  };
+
+  const options: OptionItem[] = [
+    {
+      label: "$(tools) Working Tree vs HEAD",
+      description: "Compare uncommitted workspace changes against last commit",
+      action: "worktree",
+    },
+    {
+      label: "$(git-pull-request) Staged Index vs HEAD",
+      description: "Compare staged git index changes against last commit",
+      action: "staged",
+    },
+  ];
+
+  if (commits.length > 0) {
+    options.push({
+      label: "--- Recent Git Commits ---",
+      kind: vscode.QuickPickItemKind.Separator,
+    });
+    for (const c of commits) {
+      options.push({
+        label: `$(git-commit) ${c.shortHash}`,
+        description: c.subject,
+        detail: `${c.author} • ${c.date}`,
+        action: "commit",
+        commit: c,
+      });
+    }
+  }
+
+  const selectedA = await vscode.window.showQuickPick(options, {
+    placeHolder: "Select base commit or workspace target to compare",
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+
+  if (!selectedA) {
     return undefined;
   }
 
-  const commitA = await showCommitPicker(
-    commits,
-    "Select the OLDER commit (base)"
-  );
-  if (!commitA) {
-    return undefined;
+  if (selectedA.action === "worktree") {
+    return { commitA: "HEAD", commitB: "WORKTREE" };
   }
 
-  const commitB = await showCommitPicker(
-    commits.filter((c) => c.hash !== commitA.hash),
+  if (selectedA.action === "staged") {
+    return { commitA: "HEAD", commitB: "STAGED" };
+  }
+
+  // Base commit selected, pick target commit
+  const commitA = selectedA.commit!;
+  const targetCommits = commits.filter((c) => c.hash !== commitA.hash);
+  if (targetCommits.length === 0) {
+    // Single commit repository fallback
+    return { commitA: `${commitA.hash}~1`, commitB: commitA.hash };
+  }
+
+  const selectedB = await showCommitPicker(
+    targetCommits,
     "Select the NEWER commit (target)"
   );
-  if (!commitB) {
+  if (!selectedB) {
     return undefined;
   }
 
-  return { commitA: commitA.hash, commitB: commitB.hash };
+  return { commitA: commitA.hash, commitB: selectedB.hash };
 }
 
 export async function pickCommitWithParent(
   repoPath: string
 ): Promise<CommitPair | undefined> {
   const commits = await getRecentCommits(repoPath, 50);
-  if (commits.length < 1) {
-    vscode.window.showWarningMessage("No commits found in this repository.");
+
+  if (commits.length === 0) {
+    const fallback = await vscode.window.showWarningMessage(
+      "No git commits found in history. Compare Working Tree against HEAD?",
+      "Compare Working Tree"
+    );
+    if (fallback === "Compare Working Tree") {
+      return { commitA: "HEAD", commitB: "WORKTREE" };
+    }
     return undefined;
   }
 
@@ -62,28 +119,35 @@ export async function pickCommitWithParent(
   return { commitA: `${commit.hash}~1`, commitB: commit.hash };
 }
 
-async function getRecentCommits(
+export async function getRecentCommits(
   repoPath: string,
-  count: number
+  count: number = 50
 ): Promise<CommitInfo[]> {
   return new Promise((resolve) => {
-    const format = "%H%x00%h%x00%s%x00%an%x00%ar";
-    cp.exec(
-      `git log -${count} --format="${format}"`,
-      { cwd: repoPath, maxBuffer: 1024 * 1024 },
+    const formatStr = `%H${DELIMITER}%h${DELIMITER}%s${DELIMITER}%an${DELIMITER}%ar`;
+    cp.execFile(
+      "git",
+      ["log", `-n${count}`, `--format=${formatStr}`],
+      { cwd: repoPath, maxBuffer: 10 * 1024 * 1024, encoding: "utf8" },
       (err, stdout) => {
-        if (err) {
+        if (err || !stdout) {
           resolve([]);
           return;
         }
-        const commits = stdout
-          .trim()
-          .split("\n")
-          .filter((line) => line.length > 0)
-          .map((line) => {
-            const [hash, shortHash, subject, author, date] = line.split("\0");
-            return { hash, shortHash, subject, author, date };
-          });
+        const lines = stdout.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        const commits: CommitInfo[] = [];
+        for (const line of lines) {
+          const parts = line.split(DELIMITER);
+          if (parts.length >= 5) {
+            commits.push({
+              hash: parts[0],
+              shortHash: parts[1],
+              subject: parts[2],
+              author: parts[3],
+              date: parts[4],
+            });
+          }
+        }
         resolve(commits);
       }
     );
@@ -98,14 +162,13 @@ async function showCommitPicker(
     (c) => ({
       label: `$(git-commit) ${c.shortHash}`,
       description: c.subject,
-      detail: `${c.author}, ${c.date}`,
+      detail: `${c.author} • ${c.date}`,
       commit: c,
     })
   );
 
   const selected = await vscode.window.showQuickPick(items, {
-    title,
-    placeHolder: "Type to filter commits...",
+    placeHolder: title,
     matchOnDescription: true,
     matchOnDetail: true,
   });

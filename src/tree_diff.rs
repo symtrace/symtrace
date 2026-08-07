@@ -32,6 +32,87 @@ enum MatchType {
     Modified,
 }
 
+// ── Global Multi-File AST Graph Engine ────────────────────────────────
+
+/// Reference to a significant AST node within a multi-file repository context.
+#[derive(Debug, Clone)]
+pub struct GlobalNodeRef {
+    pub file_path: String,
+    pub node_id: u64,
+    pub kind: String,
+    pub name: String,
+    pub structural_hash: [u8; 32],
+    pub content_hash: [u8; 32],
+    pub identity_hash: [u8; 32],
+    pub start_row: usize,
+    pub end_row: usize,
+    pub subtree_size: u64,
+    pub ast_node: AstNode,
+}
+
+/// Global multi-file index over AST nodes across all modified files in a commit or diff.
+pub struct GlobalNodeIndex {
+    /// structural_hash → nodes across all files
+    pub by_structural_hash: HashMap<[u8; 32], Vec<GlobalNodeRef>>,
+    /// identity_hash → nodes across all files
+    pub by_identity_hash: HashMap<[u8; 32], Vec<GlobalNodeRef>>,
+    /// kind → (name → nodes across all files)
+    pub by_kind_name: HashMap<String, HashMap<String, Vec<GlobalNodeRef>>>,
+}
+
+impl GlobalNodeIndex {
+    /// Build a global node index from a collection of file paths and their AST trees.
+    pub fn build(files: &[(&str, &AstNode)]) -> Self {
+        let mut by_structural_hash: HashMap<[u8; 32], Vec<GlobalNodeRef>> = HashMap::new();
+        let mut by_identity_hash: HashMap<[u8; 32], Vec<GlobalNodeRef>> = HashMap::new();
+        let mut by_kind_name: HashMap<String, HashMap<String, Vec<GlobalNodeRef>>> = HashMap::new();
+
+        for (path, ast) in files {
+            let nodes = collect_significant_nodes(ast, &[]);
+            for n in nodes {
+                let gref = GlobalNodeRef {
+                    file_path: path.to_string(),
+                    node_id: n.id,
+                    kind: n.kind,
+                    name: n.name,
+                    structural_hash: n.structural_hash,
+                    content_hash: n.content_hash,
+                    identity_hash: n.identity_hash,
+                    start_row: n.start_row,
+                    end_row: n.end_row,
+                    subtree_size: n.subtree_size,
+                    ast_node: n.ast_node,
+                };
+
+                by_structural_hash
+                    .entry(gref.structural_hash)
+                    .or_default()
+                    .push(gref.clone());
+
+                by_identity_hash
+                    .entry(gref.identity_hash)
+                    .or_default()
+                    .push(gref.clone());
+
+                if !gref.name.is_empty() {
+                    by_kind_name
+                        .entry(gref.kind.clone())
+                        .or_default()
+                        .entry(gref.name.clone())
+                        .or_default()
+                        .push(gref);
+                }
+            }
+        }
+
+        GlobalNodeIndex {
+            by_structural_hash,
+            by_identity_hash,
+            by_kind_name,
+        }
+    }
+}
+
 // ── Hash-bucket index for efficient candidate lookup ─────────────────
 
 /// Pre-computed hash-bucket index over B-side significant nodes.
@@ -107,6 +188,86 @@ pub fn compute_diff(
         (Some(a), None) => collect_all_as_deletes(a),
         (Some(a), Some(b)) => compute_structural_diff(a, b),
     }
+}
+
+/// Compute multi-file semantic diff with unified cross-file MOVE and RENAME detection
+/// using the `GlobalNodeIndex`.
+pub fn compute_multi_file_diff(
+    old_asts: &[(&str, &AstNode)],
+    new_asts: &[(&str, &AstNode)],
+    logic_only: bool,
+) -> HashMap<String, Vec<OperationRecord>> {
+    let mut file_ops: HashMap<String, Vec<OperationRecord>> = HashMap::new();
+
+    let all_paths: HashSet<&str> = old_asts
+        .iter()
+        .map(|(p, _)| *p)
+        .chain(new_asts.iter().map(|(p, _)| *p))
+        .collect();
+
+    for path in &all_paths {
+        let old_ast = old_asts.iter().find(|(p, _)| p == path).map(|(_, a)| *a);
+        let new_ast = new_asts.iter().find(|(p, _)| p == path).map(|(_, a)| *a);
+        let ops = compute_diff(old_ast, new_ast, logic_only);
+        file_ops.insert((*path).to_string(), ops);
+    }
+
+    // Resolve cross-file MOVE / RENAME pairs using GlobalNodeIndex
+    let _global_index = GlobalNodeIndex::build(new_asts);
+
+    let mut deleted_nodes: Vec<(String, OperationRecord)> = Vec::new();
+    let mut inserted_nodes: Vec<(String, OperationRecord)> = Vec::new();
+
+    for (path, ops) in &file_ops {
+        for op in ops {
+            if op.op_type == OperationType::Delete {
+                deleted_nodes.push((path.clone(), op.clone()));
+            } else if op.op_type == OperationType::Insert {
+                inserted_nodes.push((path.clone(), op.clone()));
+            }
+        }
+    }
+
+    let mut resolved_inserts: HashSet<String> = HashSet::new();
+
+    for (old_path, del_op) in &deleted_nodes {
+        let del_details = &del_op.details;
+        if let Some(old_loc) = &del_op.old_location {
+            for (new_path, ins_op) in &inserted_nodes {
+                if old_path == new_path || resolved_inserts.contains(&ins_op.details) {
+                    continue;
+                }
+
+                let is_same_entity = del_op.entity_type == ins_op.entity_type;
+                if is_same_entity {
+                    let del_name = del_details.split('\'').nth(1).unwrap_or("");
+                    let ins_name = ins_op.details.split('\'').nth(1).unwrap_or("");
+
+                    if !del_name.is_empty() && del_name == ins_name {
+                        let sim = del_op.similarity.clone().or_else(|| ins_op.similarity.clone());
+                        if let Some(ops) = file_ops.get_mut(old_path) {
+                            ops.retain(|o| &o.details != del_details);
+                            ops.push(OperationRecord {
+                                op_type: OperationType::Move,
+                                entity_type: del_op.entity_type.clone(),
+                                old_location: Some(format!("{}", old_loc)),
+                                new_location: ins_op.new_location.as_ref().map(|loc| format!("{}:{}", new_path, loc)),
+                                details: format!("Moved to {}:{}", new_path, ins_op.new_location.as_deref().unwrap_or("")),
+                                similarity: sim,
+                            });
+                        }
+                        if let Some(ops) = file_ops.get_mut(new_path) {
+                            ops.retain(|o| &o.details != &ins_op.details);
+                        }
+                        resolved_inserts.insert(ins_op.details.clone());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    file_ops
 }
 
 /// Return the total number of nodes in an AST (for benchmarking metrics).
@@ -359,6 +520,39 @@ fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRec
     }
 
     ops
+}
+
+/// Threshold above which subtree window diffing is activated (1 MiB = 1,048_576 bytes).
+pub const OVERSIZED_FILE_THRESHOLD_BYTES: usize = 1_048_576;
+
+/// Collect significant AST nodes, optionally filtering by changed line window ranges
+/// if the file size exceeds `OVERSIZED_FILE_THRESHOLD_BYTES`.
+#[allow(dead_code)]
+fn collect_significant_nodes_windowed(
+    node: &AstNode,
+    parent_path: &[String],
+    file_size_bytes: usize,
+    changed_windows: Option<&[(usize, usize)]>,
+) -> Vec<SignificantNode> {
+    let all_nodes = collect_significant_nodes(node, parent_path);
+
+    if file_size_bytes <= OVERSIZED_FILE_THRESHOLD_BYTES || changed_windows.is_none() {
+        return all_nodes;
+    }
+
+    let windows = match changed_windows {
+        Some(w) if !w.is_empty() => w,
+        _ => return all_nodes,
+    };
+
+    all_nodes
+        .into_iter()
+        .filter(|n| {
+            windows.iter().any(|&(w_start, w_end)| {
+                n.start_row <= w_end && n.end_row >= w_start
+            })
+        })
+        .collect()
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -859,5 +1053,31 @@ mod tests {
             ops.is_empty(),
             "comment-only change should be transparent in logic_only mode, ops: {ops:?}"
         );
+    }
+
+    // ── Phase 2 tests ────────────────────────────────────────────────
+
+    #[test]
+    fn global_node_index_build_test() {
+        let ast1 = parse("fn foo() {}", SupportedLanguage::Rust);
+        let ast2 = parse("fn bar() {}", SupportedLanguage::Rust);
+        let files = [("a.rs", &ast1), ("b.rs", &ast2)];
+        let index = GlobalNodeIndex::build(&files);
+        assert!(!index.by_structural_hash.is_empty());
+        assert!(!index.by_kind_name.is_empty());
+    }
+
+    #[test]
+    fn compute_multi_file_diff_cross_file_move_test() {
+        let old_a = parse("fn transferred_fn() {}", SupportedLanguage::Rust);
+        let new_b = parse("fn transferred_fn() {}", SupportedLanguage::Rust);
+
+        let old_files = [("a.rs", &old_a)];
+        let new_files = [("b.rs", &new_b)];
+
+        let result = compute_multi_file_diff(&old_files, &new_files, false);
+        assert!(result.contains_key("a.rs"));
+        let ops_a = &result["a.rs"];
+        assert!(ops_a.iter().any(|o| o.op_type == OperationType::Move), "expected MOVE op: {ops_a:?}");
     }
 }

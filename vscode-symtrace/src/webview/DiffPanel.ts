@@ -3,7 +3,24 @@ import {
   DiffOutput,
   FileDiff,
   OperationRecord,
-  CommitClass,
+  getFilePath,
+  getOpType,
+  getEntityType,
+  getOldLocation,
+  getNewLocation,
+  getSimilarityPercent,
+  getCommitA,
+  getCommitB,
+  getTotalFiles,
+  getTotalTimeMs,
+  getParseTimeMs,
+  getDiffTimeMs,
+  getFilesProcessed,
+  getNodesCompared,
+  getPrimaryClass,
+  getConfidenceScore,
+  getCrossFileEvents,
+  getRefactorPatterns,
 } from "../types";
 
 export class DiffPanel {
@@ -41,9 +58,11 @@ export class DiffPanel {
       return;
     }
 
+    const commitAStr = getCommitA(data);
+    const commitBStr = getCommitB(data);
     const panel = vscode.window.createWebviewPanel(
       DiffPanel.viewType,
-      `Symtrace: ${data.commit_a.substring(0, 7)}..${data.commit_b.substring(0, 7)}`,
+      `Symtrace: ${commitAStr.substring(0, 7)}..${commitBStr.substring(0, 7)}`,
       column || vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }
     );
@@ -312,25 +331,30 @@ export class DiffPanel {
 }
 
 function renderHeader(data: DiffOutput): string {
-  const classification = data.commit_classification;
-  const badge = classification
-    ? `<span class="badge ${classification.primary_class}">${classification.primary_class.replace("_", " ")} (${(classification.confidence_score * 100).toFixed(0)}%)</span>`
+  const primaryClass = getPrimaryClass(data);
+  const confidenceScore = getConfidenceScore(data);
+  const commitAStr = getCommitA(data);
+  const commitBStr = getCommitB(data);
+
+  const badge = (data.commitClassification || data.commit_classification)
+    ? `<span class="badge ${primaryClass}">${primaryClass.replace("_", " ")} (${(confidenceScore * 100).toFixed(0)}%)</span>`
     : "";
 
   return `<div class="header">
     <h1>Symtrace Semantic Diff${badge}</h1>
     <div class="meta">
       ${escHtml(data.repository)} &mdash;
-      <code>${escHtml(data.commit_a.substring(0, 10))}</code> &rarr;
-      <code>${escHtml(data.commit_b.substring(0, 10))}</code>
+      <code>${escHtml(commitAStr.substring(0, 10))}</code> &rarr;
+      <code>${escHtml(commitBStr.substring(0, 10))}</code>
     </div>
   </div>`;
 }
 
 function renderSummaryBar(data: DiffOutput): string {
   const s = data.summary;
+  const totalFilesNum = getTotalFiles(data);
   const items = [
-    { label: "Files", count: s.total_files, color: "#8b949e" },
+    { label: "Files", count: totalFilesNum, color: "#8b949e" },
     { label: "Inserts", count: s.inserts, color: "#3fb950" },
     { label: "Deletes", count: s.deletes, color: "#f85149" },
     { label: "Modifies", count: s.modifications, color: "#d29922" },
@@ -344,8 +368,9 @@ function renderSummaryBar(data: DiffOutput): string {
 }
 
 function renderFileCard(file: FileDiff): string {
-  const ops = file.operations.map((op) => renderOperation(op, file.file_path)).join("");
-  const refactors = (file.refactor_patterns ?? [])
+  const filePathStr = getFilePath(file);
+  const ops = file.operations.map((op) => renderOperation(op, filePathStr)).join("");
+  const refactors = getRefactorPatterns(file)
     .map(
       (r) =>
         `<div class="refactor-row"><span class="kind">${escHtml(r.kind)}</span> ${escHtml(r.description)} (${(r.confidence * 100).toFixed(0)}%)</div>`
@@ -355,7 +380,7 @@ function renderFileCard(file: FileDiff): string {
   return `<div class="file-card">
     <div class="file-header">
       <span class="chevron">&#9662;</span>
-      ${escHtml(file.file_path)}
+      ${escHtml(filePathStr)}
       <span style="color:var(--vscode-descriptionForeground);font-size:0.85em;margin-left:auto">${file.operations.length} ops</span>
     </div>
     <div class="file-body">${ops}${refactors}</div>
@@ -363,14 +388,20 @@ function renderFileCard(file: FileDiff): string {
 }
 
 function renderOperation(op: OperationRecord, filePath: string): string {
-  const loc = op.new_location ?? op.old_location ?? "";
+  const opType = getOpType(op);
+  const entityType = getEntityType(op);
+  const oldLoc = getOldLocation(op);
+  const newLoc = getNewLocation(op);
+  const simPercent = getSimilarityPercent(op.similarity);
+
+  const loc = newLoc ?? oldLoc ?? "";
   const lineMatch = loc.match(/L(\d+)/);
   const lineNum = lineMatch ? lineMatch[1] : "";
-  const locDisplay = formatLocation(op.old_location, op.new_location);
+  const locDisplay = formatLocation(oldLoc, newLoc);
 
   let simBar = "";
   if (op.similarity) {
-    const pct = op.similarity.similarity_percent;
+    const pct = simPercent;
     const color = pct >= 80 ? "#3fb950" : pct >= 50 ? "#d29922" : "#f85149";
     simBar = `
       <div class="similarity-bar-wrap"><div class="similarity-bar-fill" style="width:${pct}%;background:${color}"></div></div>
@@ -378,8 +409,8 @@ function renderOperation(op: OperationRecord, filePath: string): string {
   }
 
   return `<div class="op-row" data-file="${escAttr(filePath)}" data-line="${escAttr(lineNum)}">
-    <span class="op-badge ${op.type}">${op.type}</span>
-    <span class="op-entity">${escHtml(op.entity_type)}</span>
+    <span class="op-badge ${opType}">${opType}</span>
+    <span class="op-entity">${escHtml(entityType)}</span>
     <span class="op-details">${escHtml(op.details)}</span>
     <span class="op-location">${escHtml(locDisplay)}</span>
     ${simBar}
@@ -397,39 +428,53 @@ function formatLocation(
 }
 
 function renderCrossFileSection(data: DiffOutput): string {
-  const tracking = data.cross_file_tracking;
-  if (!tracking || tracking.cross_file_events.length === 0) {
+  const crossEvents = getCrossFileEvents(data);
+  const tracking = data.crossFileTracking || data.cross_file_tracking;
+  if (!tracking || crossEvents.length === 0) {
     return "";
   }
 
-  const rows = tracking.cross_file_events
+  const symbolCount = tracking.symbolCount ?? tracking.symbol_count ?? 0;
+
+  const rows = crossEvents
     .map(
-      (ev) =>
-        `<div class="cross-file-row">
+      (ev) => {
+        const score = ev.similarityScore ?? ev.similarity_score ?? 1.0;
+        return `<div class="cross-file-row">
           <strong>${escHtml(ev.event.replace(/_/g, " "))}</strong>:
           ${escHtml(ev.description)}
-          <span style="color:var(--vscode-descriptionForeground)">(${(ev.similarity_score * 100).toFixed(0)}%)</span>
-        </div>`
+          <span style="color:var(--vscode-descriptionForeground)">(${(score * 100).toFixed(0)}%)</span>
+        </div>`;
+      }
     )
     .join("");
 
   return `<div class="section">
-    <h2>Cross-File Symbol Tracking (${tracking.symbol_count} symbols)</h2>
+    <h2>Cross-File Symbol Tracking (${symbolCount} symbols)</h2>
     ${rows}
   </div>`;
 }
 
 function renderPerformance(data: DiffOutput): string {
+  const filesProc = getFilesProcessed(data);
+  const nodesComp = getNodesCompared(data);
+  const parseMs = getParseTimeMs(data);
+  const diffMs = getDiffTimeMs(data);
+  const totalMs = getTotalTimeMs(data);
+
   const p = data.performance;
+  const incrParses = p ? (p.incrementalParses ?? p.incremental_parses) : undefined;
+  const nodesReused = p ? (p.nodesReused ?? p.nodes_reused ?? 0) : 0;
+
   const items = [
-    `${p.total_files_processed} files`,
-    `${p.total_nodes_compared} nodes`,
-    `parse: ${p.parse_time_ms.toFixed(1)}ms`,
-    `diff: ${p.diff_time_ms.toFixed(1)}ms`,
-    `total: ${p.total_time_ms.toFixed(1)}ms`,
+    `${filesProc} files`,
+    `${nodesComp} nodes`,
+    `parse: ${parseMs.toFixed(1)}ms`,
+    `diff: ${diffMs.toFixed(1)}ms`,
+    `total: ${totalMs.toFixed(1)}ms`,
   ];
-  if (p.incremental_parses) {
-    items.push(`${p.incremental_parses} incremental, ${p.nodes_reused ?? 0} reused`);
+  if (incrParses) {
+    items.push(`${incrParses} incremental, ${nodesReused} reused`);
   }
   return `<div class="perf-footer">${items.map((i) => `<span>${i}</span>`).join("")}</div>`;
 }

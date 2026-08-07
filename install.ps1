@@ -17,7 +17,7 @@ function Show-Banner {
     Write-Host "  ___) | |_| | | | | | | | |_| | | (_| | (_|  __/" -ForegroundColor Cyan
     Write-Host " |____/ \__, | |_| |_| |_|\__|_|  \__,_|\___\___|" -ForegroundColor Cyan
     Write-Host "        |___/                                    " -ForegroundColor Cyan
-    Write-Host "   Deterministic AST Semantic Diff Engine v0.3.0" -ForegroundColor Magenta
+    Write-Host "   Deterministic AST Semantic Diff Engine v0.4.0" -ForegroundColor Magenta
     Write-Host "───────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
 }

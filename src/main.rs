@@ -6,13 +6,16 @@ mod config;
 mod git_layer;
 mod incremental_parse;
 mod language;
+mod merge_driver;
 mod node_identity;
 mod output;
 mod pager;
+mod query_dsl;
 mod refactor_detection;
 mod semantic_similarity;
 mod symbol_tracking;
 mod tree_diff;
+mod tui;
 mod types;
 
 use std::path::{Path, PathBuf};
@@ -24,7 +27,7 @@ use clap::Parser;
 use globset::Glob;
 use rayon::prelude::*;
 
-use ast_cache::{AstCache, CacheEntry, CacheKey};
+use ast_cache::{AstCache, CacheEntry};
 use incremental_parse::TreeCache;
 use types::*;
 
@@ -32,24 +35,37 @@ fn main() -> Result<()> {
     let args = cli::Args::parse();
 
     // ── 0. Check for subcommands (git-diff-driver mode) ───────────────
-    if let Some(cli::Commands::GitDiffDriver {
-        path,
-        old_file,
-        old_hex: _,
-        old_mode: _,
-        new_file,
-        new_hex: _,
-        new_mode: _,
-    }) = &args.command
-    {
-        return run_git_diff_driver(path, old_file, new_file, &args);
+    match &args.command {
+        Some(cli::Commands::GitDiffDriver {
+            path,
+            old_file,
+            old_hex: _,
+            old_mode: _,
+            new_file,
+            new_hex: _,
+            new_mode: _,
+        }) => {
+            return run_git_diff_driver(path, old_file, new_file, &args);
+        }
+        Some(cli::Commands::MergeDriver {
+            base_file,
+            ours_file,
+            theirs_file,
+            display_path,
+        }) => {
+            let code = merge_driver::run_merge_driver(base_file, ours_file, theirs_file, display_path)?;
+            std::process::exit(code);
+        }
+        _ => {}
     }
 
     let total_start = Instant::now();
 
+    let (raw_repo, commit_a, commit_b) = resolve_cli_targets(&args);
+
     // ── Canonical path enforcement (prevents path spoofing) ──────────
-    let canonical_repo = std::fs::canonicalize(&args.repo_path)
-        .with_context(|| format!("Failed to resolve repository path: '{}'", args.repo_path))?;
+    let canonical_repo = std::fs::canonicalize(&raw_repo)
+        .with_context(|| format!("Failed to resolve repository path: '{}'", raw_repo))?;
     let canonical_repo = strip_unc_prefix(canonical_repo);
 
     if !canonical_repo.is_dir() {
@@ -134,8 +150,8 @@ fn main() -> Result<()> {
     // ── 1. Git layer: discover changed files ─────────────────────────
     let changed_files = git_layer::get_changed_files(
         &repo_path_str,
-        &args.commit_a,
-        args.commit_b.as_deref(),
+        &commit_a,
+        commit_b.as_deref(),
         args.staged,
     )?;
 
@@ -221,13 +237,10 @@ fn main() -> Result<()> {
                         Ok((ast, new_tree, reused)) => {
                             let nc = tree_diff::count_nodes(&ast);
                             if let Some(bh) = file_change.new_blob_hash.as_deref() {
-                                let key = CacheKey {
-                                    blob_hash: bh.to_string(),
+                                cache.put_by_oid(
+                                    bh,
                                     logic_only,
-                                    limits_hash: limits.compute_limits_hash(),
-                                };
-                                cache.put(
-                                    key,
+                                    limits.compute_limits_hash(),
                                     CacheEntry {
                                         ast: ast.clone(),
                                         node_count: nc,
@@ -301,7 +314,7 @@ fn main() -> Result<()> {
     // ── 3. Compute semantic diff per file (parallel) ─────────────────
     let diff_start = Instant::now();
 
-    let file_diffs: Vec<FileDiff> = parsed_pairs
+    let mut file_diffs: Vec<FileDiff> = parsed_pairs
         .par_iter()
         .map(|(path, ast_a, ast_b)| {
             let operations = tree_diff::compute_diff(ast_a.as_ref(), ast_b.as_ref(), logic_only);
@@ -345,6 +358,13 @@ fn main() -> Result<()> {
         file_diffs.iter().all(|fd| fd.operations.is_empty())
     };
 
+    // Evaluate custom Tree-Sitter .scm rules if present
+    let queries_dir = Path::new(&repo_path_str).join(".symtrace").join("queries");
+    let query_engine = query_dsl::QueryEngine::load_from_dir(&queries_dir);
+    for file_diff in &mut file_diffs {
+        query_engine.evaluate_rules(&file_diff.file_path, &mut file_diff.operations);
+    }
+
     let commit_classification =
         commit_classification::classify_commit(&file_diffs, &summary, logic_only_no_changes);
 
@@ -353,9 +373,8 @@ fn main() -> Result<()> {
 
     let diff_output = DiffOutput {
         repository: repo_path_str.clone(),
-        commit_a: args.commit_a.clone(),
-        commit_b: args
-            .commit_b
+        commit_a: commit_a.clone(),
+        commit_b: commit_b
             .clone()
             .unwrap_or_else(|| "WORKING".to_string()),
         files: file_diffs,
@@ -375,32 +394,69 @@ fn main() -> Result<()> {
 
     // ── 7. Output with shell pager support ───────────────────────────
     let mut pager = pager::Pager::setup(no_pager);
+    let fmt = output::OutputFormat::parse(&args.format)?;
 
-    if output_json {
-        let json_str = output::format_json(&diff_output)?;
-        pager.print_output(&json_str)?;
+    let formatted_output = if args.stat {
+        output::format_stat(&diff_output)
+    } else if args.name_only {
+        output::format_name_only(&diff_output)
+    } else if output_json || fmt == output::OutputFormat::Json {
+        output::format_json(&diff_output)?
     } else {
-        let cli_str = output::format_cli(&diff_output);
-        pager.print_output(&cli_str)?;
+        match fmt {
+            output::OutputFormat::Ansi => output::format_cli(&diff_output),
+            output::OutputFormat::Json => output::format_json(&diff_output)?,
+            output::OutputFormat::Jsonl => output::format_jsonl(&diff_output)?,
+            output::OutputFormat::Markdown => output::format_markdown(&diff_output),
+            output::OutputFormat::Html => output::format_html(&diff_output),
+            output::OutputFormat::Sarif => output::format_sarif(&diff_output)?,
+        }
+    };
 
+    if matches!(&args.command, Some(cli::Commands::Tui { .. })) {
+        return tui::run_tui_inspector(&diff_output);
+    }
+
+    if fmt == output::OutputFormat::Html && !args.stat && !args.name_only {
+        let html_content = output::format_html(&diff_output);
+        let report_path = "symtrace_report.html";
+        std::fs::write(report_path, &html_content)
+            .with_context(|| format!("Failed to write HTML report to '{}'", report_path))?;
+
+        println!("[SUCCESS] Generated interactive HTML report: {}", report_path);
+        println!("[INFO] Opening report in default web browser...");
+
+        #[cfg(target_os = "windows")]
+        let _ = std::process::Command::new("cmd").args(["/C", "start", report_path]).spawn();
+        #[cfg(target_os = "macos")]
+        let _ = std::process::Command::new("open").arg(report_path).spawn();
+        #[cfg(target_os = "linux")]
+        let _ = std::process::Command::new("xdg-open").arg(report_path).spawn();
+
+        return Ok(());
+    }
+
+    pager.print_output(&formatted_output)?;
+
+    if !output_json && !args.stat && !args.name_only && fmt == output::OutputFormat::Ansi {
         let mut diag = String::new();
         if files_skipped_blob > 0 {
             diag.push_str(&format!(
-                "  ⚡ Blob hash short-circuit: {} file(s) skipped (unchanged content)\n",
+                "  [FAST] Blob hash short-circuit: {} file(s) skipped (unchanged content)\n",
                 files_skipped_blob
             ));
         }
         diag.push_str(&format!(
-            "  📦 AST cache: {} in-memory, {} on-disk entries\n",
+            "  [CACHE] AST cache: {} in-memory, {} on-disk entries\n",
             cache_mem, cache_disk
         ));
         diag.push_str(&format!(
-            "  🌲 Tree cache: {} in-memory entries\n",
+            "  [TREE] Tree cache: {} in-memory entries\n",
             tree_cache.len()
         ));
         if total_incremental_parses > 0 {
             diag.push_str(&format!(
-                "  🔄 Incremental parsing: {} file(s), {} nodes reused\n",
+                "  [REUSE] Incremental parsing: {} file(s), {} nodes reused\n",
                 total_incremental_parses, total_nodes_reused
             ));
         }
@@ -408,6 +464,14 @@ fn main() -> Result<()> {
     }
 
     pager.finish();
+
+    if args.check {
+        let has_structural_ops = diff_output.files.iter().any(|f| !f.operations.is_empty());
+        if has_structural_ops {
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
 
@@ -498,34 +562,30 @@ fn parse_or_cached_with_tree(
     logic_only: bool,
     limits: &ParserLimits,
 ) -> (Option<AstNode>, u64, Option<tree_sitter::Tree>) {
-    let content = match content {
-        Some(c) => c,
-        None => return (None, 0, None),
-    };
-
+    // ── 1. Zero-Copy Cache Lookup using blob_hash (OID) ─────────────
     if let Some(bh) = blob_hash {
-        let key = CacheKey {
-            blob_hash: bh.to_string(),
-            logic_only,
-            limits_hash: limits.compute_limits_hash(),
-        };
-        if let Some(entry) = cache.get(&key) {
+        let limits_hash = limits.compute_limits_hash();
+        if let Some(entry) = cache.get_by_oid(bh, logic_only, limits_hash) {
             let tree = tree_cache.get(bh);
             return (Some(entry.ast), entry.node_count, tree);
         }
     }
 
+    // ── 2. Fallback to parsing content if content is present ─────────
+    let content = match content {
+        Some(c) => c,
+        None => return (None, 0, None),
+    };
+
     match ast_builder::parse_content_with_tree(content, lang, logic_only, limits) {
         Ok((ast, tree)) => {
             let node_count = tree_diff::count_nodes(&ast);
             if let Some(bh) = blob_hash {
-                let key = CacheKey {
-                    blob_hash: bh.to_string(),
+                let limits_hash = limits.compute_limits_hash();
+                cache.put_by_oid(
+                    bh,
                     logic_only,
-                    limits_hash: limits.compute_limits_hash(),
-                };
-                cache.put(
-                    key,
+                    limits_hash,
                     CacheEntry {
                         ast: ast.clone(),
                         node_count,
@@ -619,4 +679,41 @@ fn strip_unc_prefix(path: PathBuf) -> PathBuf {
         }
     }
     path
+}
+
+fn resolve_cli_targets(args: &cli::Args) -> (String, String, Option<String>) {
+    if let Some(cli::Commands::Tui { commit_a, commit_b }) = &args.command {
+        let repo = args.repo_flag.clone().unwrap_or_else(|| ".".to_string());
+        return (repo, commit_a.clone(), commit_b.clone());
+    }
+
+    if let Some(ref repo_path) = args.repo_flag {
+        let commit_a = args.arg1.clone().unwrap_or_else(|| "HEAD~1".to_string());
+        let commit_b = args.arg2.clone();
+        return (repo_path.clone(), commit_a, commit_b);
+    }
+
+    let raw_args: Vec<String> = [&args.arg1, &args.arg2, &args.arg3]
+        .iter()
+        .filter_map(|a| a.as_ref().cloned())
+        .collect();
+
+    match raw_args.as_slice() {
+        [a1, a2, a3, ..] => (a1.clone(), a2.clone(), Some(a3.clone())),
+        [a1, a2] => {
+            if Path::new(a1).is_dir() {
+                (a1.clone(), a2.clone(), None)
+            } else {
+                (".".to_string(), a1.clone(), Some(a2.clone()))
+            }
+        }
+        [a1] => {
+            if Path::new(a1).is_dir() {
+                (a1.clone(), "HEAD~1".to_string(), None)
+            } else {
+                (".".to_string(), a1.clone(), None)
+            }
+        }
+        _ => (".".to_string(), "HEAD~1".to_string(), None),
+    }
 }

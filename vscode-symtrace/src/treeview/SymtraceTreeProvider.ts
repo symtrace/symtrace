@@ -1,5 +1,12 @@
 import * as vscode from "vscode";
-import { DiffOutput } from "../types";
+import {
+  DiffOutput,
+  getPrimaryClass,
+  getConfidenceScore,
+  getCommitA,
+  getCommitB,
+  getCrossFileEvents,
+} from "../types";
 import {
   SymtraceTreeItem,
   SummaryNode,
@@ -62,11 +69,13 @@ export class SymtraceTreeProvider
     const repoPath = this.repoPath!;
 
     // Commit classification badge
-    if (data.commit_classification) {
+    const primaryClass = getPrimaryClass(data);
+    const confidenceScore = getConfidenceScore(data);
+    if (data.commitClassification || data.commit_classification) {
       items.push(
         new ClassificationNode(
-          data.commit_classification.primary_class,
-          data.commit_classification.confidence_score
+          primaryClass,
+          confidenceScore
         )
       );
     }
@@ -75,16 +84,16 @@ export class SymtraceTreeProvider
     items.push(new SummaryNode(data));
 
     // File nodes
+    const commitAStr = getCommitA(data);
+    const commitBStr = getCommitB(data);
     for (const file of data.files) {
-      items.push(new FileNode(file, data.commit_a, data.commit_b, repoPath));
+      items.push(new FileNode(file, commitAStr, commitBStr, repoPath));
     }
 
     // Cross-file tracking
-    if (
-      data.cross_file_tracking &&
-      data.cross_file_tracking.cross_file_events.length > 0
-    ) {
-      items.push(new CrossFileSectionNode(data.cross_file_tracking));
+    const crossEvents = getCrossFileEvents(data);
+    if (crossEvents.length > 0) {
+      items.push(new CrossFileSectionNode(data.crossFileTracking || data.cross_file_tracking!));
     }
 
     // Performance metrics

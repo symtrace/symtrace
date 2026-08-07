@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
     long_about = "symtrace is a deterministic semantic diff engine written in Rust that compares Git \
     commits, staged index changes, or working tree modifications using AST-based structural analysis \
     instead of line-based text diffs.\n\n\
-    SUPPORTED LANGUAGES (9):\n  \
+    SUPPORTED LANGUAGES (13):\n  \
       • Rust (.rs)\n  \
       • JavaScript (.js, .jsx, .mjs, .cjs)\n  \
       • TypeScript (.ts, .tsx)\n  \
@@ -17,7 +17,11 @@ use clap::{Parser, Subcommand};
       • C (.c, .h)\n  \
       • C++ (.cpp, .hpp, .cc, .cxx, .h++)\n  \
       • Go (.go)\n  \
-      • JSON (.json, .jsonc)\n\n\
+      • JSON (.json, .jsonc)\n  \
+      • C# (.cs)\n  \
+      • Ruby (.rb)\n  \
+      • PHP (.php)\n  \
+      • Rust 2024 (.rs)\n\n\
     DETECTED SEMANTIC OPERATIONS:\n  \
       • MOVE     (↔) - Code block / function moved across files or locations\n  \
       • RENAME   (✎) - Entity renamed with structural shape preserved\n  \
@@ -29,8 +33,9 @@ use clap::{Parser, Subcommand};
       $ symtrace . HEAD                       # Compare commit_a against working directory\n  \
       $ symtrace . HEAD --staged              # Compare commit_a against staged index\n  \
       $ symtrace . HEAD~1 HEAD                # Compare two explicit commits\n  \
+      $ symtrace -r /path/to/repo HEAD~1 HEAD # Compare commits in explicit repo path\n  \
       $ symtrace . HEAD~1 HEAD -p \"src/**/*.rs\"# Filter by path glob\n  \
-      $ symtrace . HEAD~1 HEAD --json         # Structured JSON output\n  \
+      $ symtrace . HEAD~1 HEAD --format json  # Structured JSON output\n  \
       $ symtrace . HEAD~1 HEAD --logic-only   # Ignore comments & whitespace\n\n\
     CONFIGURATION:\n  \
       Loads configuration automatically from .symtracerc or symtrace.toml in the repository\n  \
@@ -40,16 +45,18 @@ pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    /// Path to local git repository (defaults to current directory if omitted)
-    #[arg(default_value = ".")]
-    pub repo_path: String,
+    /// Path to local git repository (optional flag)
+    #[arg(short = 'r', long = "repo")]
+    pub repo_flag: Option<String>,
 
-    /// Older commit reference (hash, HEAD~1, branch, tag, etc., defaults to HEAD~1)
-    #[arg(default_value = "HEAD~1")]
-    pub commit_a: String,
+    /// First positional target (repo path or commit_a)
+    pub arg1: Option<String>,
 
-    /// Newer commit reference (hash, HEAD, branch, tag, etc., optional)
-    pub commit_b: Option<String>,
+    /// Second positional target (commit_a or commit_b)
+    pub arg2: Option<String>,
+
+    /// Third positional target (commit_b)
+    pub arg3: Option<String>,
 
     /// Diff staged index changes against commit_a
     #[arg(long, alias = "cached")]
@@ -98,6 +105,22 @@ pub struct Args {
     /// Disable incremental parsing (always do full parse)
     #[arg(long)]
     pub no_incremental: bool,
+
+    /// Output high-level semantic summary table
+    #[arg(short = 's', long)]
+    pub stat: bool,
+
+    /// Exit with code 1 if structural semantic changes exist
+    #[arg(long)]
+    pub check: bool,
+
+    /// List only changed file paths containing structural changes
+    #[arg(long)]
+    pub name_only: bool,
+
+    /// Specify output format: ansi, json, jsonl, markdown, html, sarif
+    #[arg(long, default_value = "ansi")]
+    pub format: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -119,5 +142,28 @@ pub enum Commands {
         new_hex: String,
         /// New file mode
         new_mode: String,
+    },
+
+    /// Interactive TUI inspector mode
+    #[command(name = "tui")]
+    Tui {
+        /// Target commit or ref (default: HEAD~1)
+        #[arg(default_value = "HEAD~1")]
+        commit_a: String,
+        /// Target commit or ref (optional)
+        commit_b: Option<String>,
+    },
+
+    /// Native 3-way AST semantic merge driver mode (invoked by git merge)
+    #[command(name = "merge-driver")]
+    MergeDriver {
+        /// Base commit file (%O)
+        base_file: String,
+        /// Ours commit file (%A)
+        ours_file: String,
+        /// Theirs commit file (%B)
+        theirs_file: String,
+        /// Display file path (%P)
+        display_path: String,
     },
 }

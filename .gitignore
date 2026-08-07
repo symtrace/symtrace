@@ -2,7 +2,24 @@
 /target/
 **/*.rs.bk
 
-# IDE and editor files
+# Generated Reports & Output Artifacts
+symtrace_report*.html
+*.sarif
+
+# VS Code Extension Build Artifacts
+vscode-symtrace/out/
+vscode-symtrace/dist/
+vscode-symtrace/node_modules/
+*.vsix
+.vscode-test/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE and Editor Files
 .vscode/
 .idea/
 *.swp
@@ -16,7 +33,10 @@ Thumbs.db
 .DS_Store
 .directory
 
-# Temporary and personal files
+# OS-Specific Files
+Thumbs.db
+
+# Temporary & Log Files
 *.tmp
 *.log
 *.bak

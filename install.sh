@@ -25,7 +25,7 @@ animate_banner() {
   echo "  ___) | |_| | | | | | | | |_| | | (_| | (_|  __/"
   echo " |____/ \__, | |_| |_| |_|\__|_|  \__,_|\___\___|"
   echo "        |___/                                    "
-  echo -e "${MAGENTA}${BOLD}   Deterministic AST Semantic Diff Engine v0.3.0${NC}"
+  echo -e "${MAGENTA}${BOLD}   Deterministic AST Semantic Diff Engine v0.4.0${NC}"
   echo -e "${DIM}───────────────────────────────────────────────────${NC}"
   echo ""
 }

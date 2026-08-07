@@ -164,6 +164,12 @@ async function runAndDisplay(
 }
 
 function getRepoPath(): string | undefined {
+  if (vscode.window.activeTextEditor) {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri);
+    if (folder) {
+      return folder.uri.fsPath;
+    }
+  }
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {
     vscode.window.showErrorMessage("No workspace folder open.");

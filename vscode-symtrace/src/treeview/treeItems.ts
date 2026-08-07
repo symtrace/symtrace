@@ -8,6 +8,21 @@ import {
   CrossFileMatch,
   RefactorPattern,
   PerformanceMetrics,
+  getFilePath,
+  getOpType,
+  getEntityType,
+  getOldLocation,
+  getNewLocation,
+  getSimilarityPercent,
+  getChangeIntensity,
+  getInvolvedEntities,
+  getRefactorPatterns,
+  getFilesProcessed,
+  getNodesCompared,
+  getParseTimeMs,
+  getDiffTimeMs,
+  getTotalTimeMs,
+  getTotalFiles,
 } from "../types";
 
 export type SymtraceTreeItem =
@@ -31,7 +46,7 @@ export class SummaryNode extends vscode.TreeItem {
   getChildren(): SummaryDetailNode[] {
     const s = this.data.summary;
     return [
-      new SummaryDetailNode("Files", s.total_files, "files"),
+      new SummaryDetailNode("Files", getTotalFiles(this.data), "files"),
       new SummaryDetailNode("Inserts", s.inserts, "diff-added"),
       new SummaryDetailNode("Deletes", s.deletes, "diff-removed"),
       new SummaryDetailNode("Modifications", s.modifications, "diff-modified"),
@@ -55,7 +70,8 @@ export class FileNode extends vscode.TreeItem {
     private readonly commitB: string,
     private readonly repoPath: string
   ) {
-    super(fileDiff.file_path, vscode.TreeItemCollapsibleState.Expanded);
+    const pathStr = getFilePath(fileDiff);
+    super(pathStr, vscode.TreeItemCollapsibleState.Expanded);
     const opCount = fileDiff.operations.length;
     this.description = `${opCount} operation${opCount !== 1 ? "s" : ""}`;
     this.iconPath = new vscode.ThemeIcon("file-code");
@@ -63,17 +79,18 @@ export class FileNode extends vscode.TreeItem {
   }
 
   getChildren(): (OperationNode | RefactorPatternNode)[] {
+    const filePathStr = getFilePath(this.fileDiff);
     const ops = this.fileDiff.operations.map(
       (op) =>
         new OperationNode(
           op,
-          this.fileDiff.file_path,
+          filePathStr,
           this.commitA,
           this.commitB,
           this.repoPath
         )
     );
-    const refactors = (this.fileDiff.refactor_patterns ?? []).map(
+    const refactors = getRefactorPatterns(this.fileDiff).map(
       (r) => new RefactorPatternNode(r)
     );
     return [...ops, ...refactors];
@@ -118,21 +135,28 @@ export class OperationNode extends vscode.TreeItem {
     private readonly commitB: string,
     private readonly repoPath: string
   ) {
+    const opType = getOpType(operation);
+    const entityType = getEntityType(operation);
+    const oldLoc = getOldLocation(operation);
+    const newLoc = getNewLocation(operation);
+    const simPercent = getSimilarityPercent(operation.similarity);
+    const intensity = getChangeIntensity(operation.similarity);
+
     super(
-      `${operation.type} ${operation.entity_type}`,
+      `${opType} ${entityType}`,
       vscode.TreeItemCollapsibleState.None
     );
 
-    this.iconPath = getOperationIcon(operation.type);
+    this.iconPath = getOperationIcon(opType);
     this.description = operation.details;
 
-    const loc = operation.new_location ?? operation.old_location ?? "";
-    let tooltip = `${operation.type} ${operation.entity_type}: ${operation.details}`;
+    const loc = newLoc ?? oldLoc ?? "";
+    let tooltip = `${opType} ${entityType}: ${operation.details}`;
     if (loc) {
       tooltip += `\nLocation: ${loc}`;
     }
     if (operation.similarity) {
-      tooltip += `\nSimilarity: ${operation.similarity.similarity_percent.toFixed(0)}% (${operation.similarity.change_intensity})`;
+      tooltip += `\nSimilarity: ${simPercent.toFixed(0)}% (${intensity})`;
     }
     tooltip += `\n\nClick to open side-by-side diff`;
     this.tooltip = tooltip;
@@ -167,7 +191,8 @@ export class RefactorPatternNode extends vscode.TreeItem {
       "wand",
       new vscode.ThemeColor("charts.purple")
     );
-    this.tooltip = `Refactor: ${kindLabel}\n${pattern.description}\nEntities: ${pattern.involved_entities.join(", ")}\nConfidence: ${(pattern.confidence * 100).toFixed(0)}%`;
+    const entities = getInvolvedEntities(pattern).join(", ");
+    this.tooltip = `Refactor: ${kindLabel}\n${pattern.description}\nEntities: ${entities}\nConfidence: ${(pattern.confidence * 100).toFixed(0)}%`;
     this.contextValue = "refactorPattern";
   }
 }
@@ -175,20 +200,26 @@ export class RefactorPatternNode extends vscode.TreeItem {
 export class CrossFileSectionNode extends vscode.TreeItem {
   constructor(private tracking: CrossFileTracking) {
     super("Cross-File Events", vscode.TreeItemCollapsibleState.Collapsed);
-    this.description = `${tracking.cross_file_events.length} event${tracking.cross_file_events.length !== 1 ? "s" : ""}`;
+    const events = tracking.crossFileEvents || tracking.cross_file_events || [];
+    this.description = `${events.length} event${events.length !== 1 ? "s" : ""}`;
     this.iconPath = new vscode.ThemeIcon("references");
     this.contextValue = "crossFileSection";
   }
 
   getChildren(): CrossFileEventNode[] {
-    return this.tracking.cross_file_events.map(
-      (ev) => new CrossFileEventNode(ev)
-    );
+    const events = this.tracking.crossFileEvents || this.tracking.cross_file_events || [];
+    return events.map((ev) => new CrossFileEventNode(ev));
   }
 }
 
 export class CrossFileEventNode extends vscode.TreeItem {
   constructor(event: CrossFileMatch) {
+    const oldSym = event.oldSymbol || event.old_symbol || "";
+    const oldF = event.oldFile || event.old_file || "";
+    const newSym = event.newSymbol || event.new_symbol || "";
+    const newF = event.newFile || event.new_file || "";
+    const score = event.similarityScore ?? event.similarity_score ?? 1.0;
+
     const label =
       event.event === "cross_file_move"
         ? "Move"
@@ -197,7 +228,7 @@ export class CrossFileEventNode extends vscode.TreeItem {
           : "API Change";
     super(label, vscode.TreeItemCollapsibleState.None);
     this.description = event.description;
-    this.tooltip = `${event.old_symbol} (${event.old_file}) -> ${event.new_symbol} (${event.new_file})\nSimilarity: ${(event.similarity_score * 100).toFixed(0)}%`;
+    this.tooltip = `${oldSym} (${oldF}) -> ${newSym} (${newF})\nSimilarity: ${(score * 100).toFixed(0)}%`;
 
     const iconMap: Record<string, string> = {
       cross_file_move: "arrow-both",
@@ -211,51 +242,60 @@ export class CrossFileEventNode extends vscode.TreeItem {
 export class PerformanceNode extends vscode.TreeItem {
   constructor(private perf: PerformanceMetrics) {
     super("Performance", vscode.TreeItemCollapsibleState.Collapsed);
-    this.description = `${perf.total_time_ms.toFixed(1)}ms total`;
+    const totalMs = perf.totalTimeMs ?? perf.total_time_ms ?? 0;
+    this.description = `${totalMs.toFixed(1)}ms total`;
     this.iconPath = new vscode.ThemeIcon("dashboard");
     this.contextValue = "performance";
   }
 
   getChildren(): SummaryDetailNode[] {
+    const filesProc = this.perf.totalFilesProcessed ?? this.perf.total_files_processed ?? 0;
+    const nodesComp = this.perf.totalNodesCompared ?? this.perf.total_nodes_compared ?? 0;
+    const parseMs = this.perf.parseTimeMs ?? this.perf.parse_time_ms ?? 0;
+    const diffMs = this.perf.diffTimeMs ?? this.perf.diff_time_ms ?? 0;
+    const totalMs = this.perf.totalTimeMs ?? this.perf.total_time_ms ?? 0;
+    const incrParses = this.perf.incrementalParses ?? this.perf.incremental_parses;
+    const nodesReused = this.perf.nodesReused ?? this.perf.nodes_reused;
+
     const items: SummaryDetailNode[] = [
       new SummaryDetailNode(
         "Files processed",
-        this.perf.total_files_processed,
+        filesProc,
         "files"
       ),
       new SummaryDetailNode(
         "Nodes compared",
-        this.perf.total_nodes_compared,
+        nodesComp,
         "symbol-number"
       ),
       new SummaryDetailNode(
         "Parse time",
-        `${this.perf.parse_time_ms.toFixed(1)}ms`,
+        `${parseMs.toFixed(1)}ms`,
         "clock"
       ),
       new SummaryDetailNode(
         "Diff time",
-        `${this.perf.diff_time_ms.toFixed(1)}ms`,
+        `${diffMs.toFixed(1)}ms`,
         "clock"
       ),
       new SummaryDetailNode(
         "Total time",
-        `${this.perf.total_time_ms.toFixed(1)}ms`,
+        `${totalMs.toFixed(1)}ms`,
         "clock"
       ),
     ];
-    if (this.perf.incremental_parses != null) {
+    if (incrParses != null) {
       items.push(
         new SummaryDetailNode(
           "Incremental parses",
-          this.perf.incremental_parses,
+          incrParses,
           "sync"
         )
       );
     }
-    if (this.perf.nodes_reused != null) {
+    if (nodesReused != null) {
       items.push(
-        new SummaryDetailNode("Nodes reused", this.perf.nodes_reused, "sync")
+        new SummaryDetailNode("Nodes reused", nodesReused, "sync")
       );
     }
     return items;

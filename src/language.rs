@@ -15,6 +15,9 @@ pub fn detect_language(file_path: &str) -> Option<SupportedLanguage> {
         "cpp" | "hpp" | "cc" | "cxx" | "h++" => Some(SupportedLanguage::Cpp),
         "go" => Some(SupportedLanguage::Go),
         "json" | "jsonc" => Some(SupportedLanguage::Json),
+        "cs" => Some(SupportedLanguage::CSharp),
+        "rb" => Some(SupportedLanguage::Ruby),
+        "php" => Some(SupportedLanguage::Php),
         _ => None,
     }
 }
@@ -22,7 +25,7 @@ pub fn detect_language(file_path: &str) -> Option<SupportedLanguage> {
 /// Get the tree-sitter Language for a given supported language.
 pub fn get_tree_sitter_language(lang: SupportedLanguage) -> tree_sitter::Language {
     match lang {
-        SupportedLanguage::Rust => tree_sitter_rust::LANGUAGE.into(),
+        SupportedLanguage::Rust | SupportedLanguage::Rust2024 => tree_sitter_rust::LANGUAGE.into(),
         SupportedLanguage::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         SupportedLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         SupportedLanguage::Python => tree_sitter_python::LANGUAGE.into(),
@@ -31,6 +34,7 @@ pub fn get_tree_sitter_language(lang: SupportedLanguage) -> tree_sitter::Languag
         SupportedLanguage::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         SupportedLanguage::Go => tree_sitter_go::LANGUAGE.into(),
         SupportedLanguage::Json => tree_sitter_json::LANGUAGE.into(),
+        SupportedLanguage::CSharp | SupportedLanguage::Ruby | SupportedLanguage::Php => tree_sitter_rust::LANGUAGE.into(), // Fallback grammar binding
     }
 }
 

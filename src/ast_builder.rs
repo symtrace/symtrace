@@ -8,6 +8,48 @@ use crate::language::get_tree_sitter_language;
 use crate::node_identity;
 use crate::types::{AstNode, ParserLimits, SupportedLanguage};
 
+use std::cell::RefCell;
+
+// ── Arena & Parser Recycling ────────────────────────────────────────
+
+/// Thread-local pool recycling `bumpalo::Bump` arenas and `tree_sitter::Parser` instances
+/// across file parses on worker threads.
+pub struct BumpaloRecycler {
+    pub bump: Bump,
+    pub parser: Parser,
+}
+
+impl BumpaloRecycler {
+    pub fn new() -> Self {
+        Self {
+            bump: Bump::new(),
+            parser: Parser::new(),
+        }
+    }
+
+    /// Reset arena memory allocation buffers for instant zero-allocation reuse.
+    pub fn reset(&mut self) {
+        self.bump.reset();
+    }
+}
+
+/// Access thread-local BumpaloRecycler for parsing.
+pub fn with_recycler<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut BumpaloRecycler) -> R,
+{
+    thread_local! {
+        static RECYCLER: RefCell<BumpaloRecycler> = RefCell::new(BumpaloRecycler::new());
+    }
+
+    RECYCLER.with(|r| {
+        let mut recycler = r.borrow_mut();
+        let res = f(&mut recycler);
+        recycler.reset();
+        res
+    })
+}
+
 // ── Arena-allocated intermediate AST node ────────────────────────────
 
 /// Intermediate AST node allocated in a bumpalo arena for efficient
@@ -95,28 +137,35 @@ pub fn parse_content_with_tree(
         );
     }
 
-    let mut parser = Parser::new();
-    let ts_language = get_tree_sitter_language(lang);
-    parser
-        .set_language(&ts_language)
-        .context("Failed to set tree-sitter language for parser")?;
+    with_recycler(|recycler| {
+        let ts_language = get_tree_sitter_language(lang);
+        recycler
+            .parser
+            .set_language(&ts_language)
+            .context("Failed to set tree-sitter language for parser")?;
 
-    let tree = do_tree_sitter_parse(&mut parser, content, None, limits)?;
+        let tree = do_tree_sitter_parse(&mut recycler.parser, content, None, limits)?;
 
-    let root = tree.root_node();
+        let root = tree.root_node();
 
-    // Arena-accelerated construction phase
-    let bump = Bump::new();
-    let mut id_counter = 0u64;
-    let arena_ast =
-        build_arena_ast_node(&bump, root, content, logic_only, &mut id_counter, limits, 0)?;
-    let mut ast = arena_ast.to_owned_ast();
-    // Bump allocator dropped here — single deallocation for all construction temporaries
+        // Arena-accelerated construction phase with thread-local recycler
+        let mut id_counter = 0u64;
+        let arena_ast = build_arena_ast_node(
+            &recycler.bump,
+            root,
+            content,
+            logic_only,
+            &mut id_counter,
+            limits,
+            0,
+        )?;
+        let mut ast = arena_ast.to_owned_ast();
 
-    // Compute structural and identity hashes bottom-up
-    node_identity::compute_hashes(&mut ast, logic_only);
+        // Compute structural and identity hashes bottom-up
+        node_identity::compute_hashes(&mut ast, logic_only);
 
-    Ok((ast, tree))
+        Ok((ast, tree))
+    })
 }
 
 /// Parse source code incrementally using a previous tree-sitter Tree.
@@ -153,61 +202,56 @@ pub fn parse_content_incremental(
         );
     }
 
-    // ── 1. Compute minimal edit ──────────────────────────────────────
-    let edit = incremental_parse::compute_edit(old_content, new_content);
+    with_recycler(|recycler| {
+        // ── 1. Compute minimal edit ──────────────────────────────────────
+        let edit = incremental_parse::compute_edit(old_content, new_content);
 
-    // ── 2. Clone and edit old tree ───────────────────────────────────
-    let mut edited_tree = old_tree.clone();
-    edited_tree.edit(&edit);
+        // ── 2. Clone and edit old tree ───────────────────────────────────
+        let mut edited_tree = old_tree.clone();
+        edited_tree.edit(&edit);
 
-    // ── 3. Incremental tree-sitter parse ─────────────────────────────
-    let mut parser = Parser::new();
-    let ts_language = get_tree_sitter_language(lang);
-    parser
-        .set_language(&ts_language)
-        .context("Failed to set tree-sitter language for parser")?;
+        // ── 3. Incremental tree-sitter parse ─────────────────────────────
+        let ts_language = get_tree_sitter_language(lang);
+        recycler
+            .parser
+            .set_language(&ts_language)
+            .context("Failed to set tree-sitter language for parser")?;
 
-    let new_tree = do_tree_sitter_parse(&mut parser, new_content, Some(&edited_tree), limits)?;
+        let new_tree = do_tree_sitter_parse(&mut recycler.parser, new_content, Some(&edited_tree), limits)?;
 
-    // ── 4. Compute changed regions for hash reuse ──────────────────
-    //    tree-sitter's changed_ranges() reports structural differences
-    //    but may miss leaf content changes (e.g. "1" → "2" keeps the
-    //    same integer_literal node kind). We use the edit byte region
-    //    directly — this precisely identifies all bytes that differ
-    //    between old and new content.
-    let changed_ranges: Vec<tree_sitter::Range> =
-        if edit.start_byte < edit.new_end_byte || edit.start_byte < edit.old_end_byte {
-            vec![tree_sitter::Range {
-                start_byte: edit.start_byte,
-                end_byte: edit.new_end_byte.max(edit.start_byte),
-                start_point: edit.start_position,
-                end_point: edit.new_end_position,
-            }]
-        } else {
-            // Identical content — no changed ranges
-            vec![]
-        };
+        // ── 4. Compute changed regions for hash reuse ──────────────────
+        let changed_ranges: Vec<tree_sitter::Range> =
+            if edit.start_byte < edit.new_end_byte || edit.start_byte < edit.old_end_byte {
+                vec![tree_sitter::Range {
+                    start_byte: edit.start_byte,
+                    end_byte: edit.new_end_byte.max(edit.start_byte),
+                    start_point: edit.start_position,
+                    end_point: edit.new_end_position,
+                }]
+            } else {
+                vec![]
+            };
 
-    // ── 5. Build AstNode from incrementally-parsed tree ──────────────
-    let root = new_tree.root_node();
-    let bump = Bump::new();
-    let mut id_counter = 0u64;
-    let arena_ast = build_arena_ast_node(
-        &bump,
-        root,
-        new_content,
-        logic_only,
-        &mut id_counter,
-        limits,
-        0,
-    )?;
-    let mut ast = arena_ast.to_owned_ast();
+        // ── 5. Build AstNode from incrementally-parsed tree ──────────────
+        let root = new_tree.root_node();
+        let mut id_counter = 0u64;
+        let arena_ast = build_arena_ast_node(
+            &recycler.bump,
+            root,
+            new_content,
+            logic_only,
+            &mut id_counter,
+            limits,
+            0,
+        )?;
+        let mut ast = arena_ast.to_owned_ast();
 
-    // ── 6. Compute hashes with reuse for unchanged subtrees ──────────
-    let nodes_reused =
-        node_identity::compute_hashes_incremental(&mut ast, old_ast, &changed_ranges, logic_only);
+        // ── 6. Compute hashes with reuse for unchanged subtrees ──────────
+        let nodes_reused =
+            node_identity::compute_hashes_incremental(&mut ast, old_ast, &changed_ranges, logic_only);
 
-    Ok((ast, new_tree, nodes_reused))
+        Ok((ast, new_tree, nodes_reused))
+    })
 }
 
 /// Shared tree-sitter parsing logic with optional old tree and timeout.
@@ -303,15 +347,25 @@ fn build_arena_ast_node<'a>(
         }
     }
 
+    let start_row = node.start_position().row;
+    let start_col = node.start_position().column;
+    let end_col = node.end_position().column;
+    let raw_end_row = node.end_position().row;
+    let end_row = if end_col == 0 && raw_end_row > start_row {
+        raw_end_row - 1
+    } else {
+        raw_end_row
+    };
+
     Ok(ArenaAstNode {
         id,
         kind,
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
-        start_row: node.start_position().row,
-        start_col: node.start_position().column,
-        end_row: node.end_position().row,
-        end_col: node.end_position().column,
+        start_row,
+        start_col,
+        end_row,
+        end_col,
         text,
         children,
         is_named: node.is_named(),

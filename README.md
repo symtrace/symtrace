@@ -1,18 +1,22 @@
 <p align="center">
-  <img src="vscode-symtrace/media/symtrace-logo.png" alt="symtrace logo" width="400">
+  <img src="https://raw.githubusercontent.com/JashT14/symtrace/main/vscode-symtrace/media/symtrace-banner.jpg" alt="symtrace banner" width="700">
 </p>
 
 # symtrace
 
-A **deterministic semantic diff engine** written in Rust that compares Git commits using **AST-based structural analysis** instead of traditional line-based text diff.
+A **deterministic semantic diff engine** written in Rust that compares Git commits using **AST-based structural analysis** instead of traditional line-based text diffs.
 
-Where `git diff` shows you *lines that changed*, `symtrace` shows you *what semantically changed* — functions moved, classes deleted, variables renamed, code blocks inserted — at the AST node level, with no false positives from formatting or comment edits.
+Where `git diff` shows you *lines that changed*, `symtrace` shows you *what semantically changed* - functions moved, classes deleted, variables renamed, code blocks inserted - at the AST node level, with zero false positives from formatting or comment edits.
 
-### Example: Traditional `git diff` vs. `symtrace`
+> [!IMPORTANT]
+> **Detailed Technical Specifications & Architecture:**
+> For in-depth technical documentation covering the 5-phase AST matching algorithm, BLAKE3 node identity hashing, multi-file index graph, native 3-way AST merge driver, SARIF/HTML schemas, and security supply chain specs, please see [TECHNICAL_SPECIFICATIONS.md](TECHNICAL_SPECIFICATIONS.md).
 
-When moving a function and renaming a variable inside it:
+## What Problem Does `symtrace` Solve?
 
-**Traditional `git diff` (Line-based deletion & insertion):**
+### The Problem with Standard `git diff`
+
+When you reformat your code, move a function down 50 lines, or rename a variable inside a function, standard `git diff` compares your code **line-by-line**. It marks whole sections as deleted and re-inserted:
 
 ```diff
 - fn process_user(id: u64) -> User {
@@ -26,85 +30,56 @@ When moving a function and renaming a variable inside it:
 + }
 ```
 
-**`symtrace` (AST-based semantic understanding):**
+### The `symtrace` Solution
 
-```
+`symtrace` parses code into an Abstract Syntax Tree (AST) - understanding real code constructs (functions, variables, classes, imports). It filters out whitespace, comments, and formatting tweaks to display **exact semantic operations**:
+
+```text
 ━━━ src/user.rs
-  ✎ [RENAME] variable 'user' renamed to 'account' (L12 → L85) [95% similarity, low]
-  ↔ [MOVE]   function_item 'process_user' moved (L10 → L83) [100% similarity, low]
+  [RENAME] variable 'user' renamed to 'account' (L12 → L85) [95% similarity]
+  [MOVE]   function_item 'process_user' moved (L10 → L83) [100% similarity]
   ── Refactor Patterns ──
-    ▸ Variable renamed 'user' ➔ 'account' inside 'process_user' (confidence: 100%)
+    ▸ Variable renamed 'user' -> 'account' inside 'process_user' (confidence: 100%)
 ```
 
-## Features (v0.3.0)
+## Understanding Output Operations (Cheatsheet)
 
-### Key Highlights (Beginner-Friendly)
+When `symtrace` analyzes a diff, operations are classified into five primary types:
 
-- **Understands Code Structure** — Sees true code changes like moved functions or renamed variables without getting confused by formatting tweaks or comment updates.
-- **Multi-Language Support** — Works seamlessly across 9 popular languages/formats: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, and JSON.
-- **Plugs Right Into Git** — Integrates directly with your existing Git workflow as a drop-in `git diff` replacement.
-- **Detects Refactoring Patterns** — Automatically identifies structural refactors (like function extraction or renames) and categorizes commit types.
-- **Blazing Fast & Offline** — Built in high-performance Rust with intelligent caching, operating entirely locally with zero network calls.
-- **Automation Ready** — Produces structured JSON output for easy integration into CI/CD pipelines and custom tools.
+| Operation | Plain-English Description | Example Scenario |
+| :--- | :--- | :--- |
+| **`[MOVE]`** | A function, class, or method was moved to a new line or another file without logic changes. | Moving `fn parseConfig` to the bottom of the file or into `config.rs`. |
+| **`[RENAME]`** | A variable, function, or struct was renamed across its scope. | Renaming parameter `user_id` to `account_id`. |
+| **`[MODIFY]`** | The internal logic of an existing function or class was modified. | Adding an `if` validation check inside an existing method. |
+| **`[INSERT]`** | A new function, struct, class, or code block was added. | Declaring a new helper function `fn validate_token`. |
+| **`[DELETE]`** | A function, struct, class, or code block was removed. | Removing a deprecated legacy function. |
 
-### Technical Specifications
+## Features (v0.4.0)
 
-- **Semantic Operations** — MOVE, RENAME, MODIFY, INSERT, DELETE detected at the AST node level
-- **Expanded Language Support** — 9 first-class languages/formats: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, and JSON
-- **Native Git Diff Driver** — Direct integration as a `git diff` driver via `git-diff-driver` subcommand
-- **Interactive Shell Pager** — Automatic piping to `$GIT_PAGER` / `$PAGER` (`less -RFX`) for interactive TTY execution
-- **Path Glob Filtering** — Restrict diffing to specific patterns using `--path <GLOB>` (`-p`)
-- **Flexible Commit Resolution** — Positional arguments default gracefully (repo path defaults to `.`, `commit_a` to `HEAD~1`, `commit_b` to working tree); supports `--staged` / `--cached`
-- **Config Loader** — Hierarchical `.symtracerc` / `symtrace.toml` configuration loader
-- **ANSI Color Controls** — `--color <auto|always|never>` respecting standard `NO_COLOR` environment variables
-- **Dual-Path Git Rename Tracking** — Retains both `old_path` and `new_path` across file rename events
-- **5-Phase Matching Algorithm** — Exact hash match → structural match → similarity scoring → leftovers
-- **4-Hash BLAKE3 Node Identity** — Structural, content, identity, and context hashes per node (limits-aware cache keying)
-- **Bounded LRU Caches** — In-memory LRU tree cache (500 capacity) + external versioned AST cache
-- **Refactor Pattern & Symbol Tracking** — Cross-file symbol movement, rename tracking, and method extraction detection
-- **Commit Classification** — Automatically labels commits (feature, bugfix, refactor, cleanup, formatting_only, etc.)
-- **Machine-Readable Output** — Structured `--json` format for CI/CD pipelines
-- **Rigorous Quality & Testing** — Property-based testing (`proptest`), differential testing, fuzzing (`cargo-fuzz`), and 166 passing tests
-- **Security & Provenance** — Safe Rust enforced (`unsafe_code = "deny"`), keyless Cosign OIDC signing, SPDX SBOM, and GitHub Artifact Attestations
+- **Understands Code Structure:** Sees true code changes like moved functions or renamed variables without getting confused by formatting tweaks or comment updates.
+- **Multi-Language Support:** Works seamlessly across 13 popular languages & formats: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, JSON, C#, Ruby, PHP, and Rust 2024.
+- **Plugs Right Into Git:** Integrates directly with your existing Git workflow as a drop-in `git diff` replacement or native 3-way merge driver.
+- **Interactive TUI Inspector (`symtrace tui`):** Includes a zero-flicker terminal workspace with arrow-key controls to scroll files, inspect operations, and view line details.
+- **White-Mode HTML & PDF Export:** Generates professional white-mode reports (`symtrace_report.html`) complete with a `Print / Save PDF` button and cryptographic BLAKE3 digital signatures.
+- **Detects Refactoring Patterns:** Automatically identifies structural refactors (like function extraction or variable renames) and categorizes commit intent.
+- **Blazing Fast & Offline:** Built in high-performance Rust with zero-copy Git OID caching, operating 100% locally with zero network calls.
 
 ## Supported Languages
 
 | Language | Extensions | Key Entity Identifiers |
-| ------------ | ------------------------------------- | ------------------------ |
-| **Rust** | `.rs` | `function_item`, `struct_item`, `enum_item`, `impl_item`, `trait_item` |
-| **JavaScript** | `.js`, `.jsx`, `.mjs`, `.cjs` | `function_declaration`, `class_declaration`, `method_definition` |
-| **TypeScript** | `.ts`, `.tsx` | `function_declaration`, `class_declaration`, `interface_declaration`, `type_alias_declaration` |
+| :--- | :--- | :--- |
+| **Rust / Rust 2024** | `.rs` | `function_item`, `struct_item`, `enum_item`, `impl_item`, `trait_item` |
+| **JavaScript / JSX** | `.js`, `.jsx`, `.mjs`, `.cjs` | `function_declaration`, `class_declaration`, `method_definition` |
+| **TypeScript / TSX** | `.ts`, `.tsx` | `function_declaration`, `class_declaration`, `interface_declaration`, `type_alias` |
 | **Python** | `.py`, `.pyi` | `function_definition`, `class_definition` |
 | **Java** | `.java` | `method_declaration`, `class_declaration`, `interface_declaration` |
 | **C** | `.c`, `.h` | `function_definition`, `struct_specifier`, `enum_specifier`, `type_definition` |
-| **C++** | `.cpp`, `.hpp`, `.cc`, `.cxx`, `.h++` | `function_definition`, `class_specifier`, `namespace_definition`, `template_declaration` |
-| **Go** | `.go` | `function_declaration`, `method_declaration`, `type_declaration`, `type_spec` |
+| **C++** | `.cpp`, `.hpp`, `.cc`, `.cxx` | `function_definition`, `class_specifier`, `namespace_definition` |
+| **Go** | `.go` | `function_declaration`, `method_declaration`, `type_declaration` |
 | **JSON** | `.json`, `.jsonc` | `pair`, `object`, `array` |
-
-## Quick Start
-
-```bash
-# Compare working directory against HEAD (in current directory)
-symtrace
-
-# Compare specific commit against working directory
-symtrace . HEAD
-
-# Compare staged index against HEAD
-symtrace . HEAD --staged
-
-# Compare two commits
-symtrace /path/to/repo a1b2c3d 9f8e7d6
-
-# Filter diff by file path glob
-symtrace . HEAD~1 HEAD -p "src/**/*.rs"
-
-# Emit machine-readable JSON
-symtrace . HEAD~1 HEAD --json
-
-# Ignore comment/whitespace changes
-symtrace . HEAD~1 HEAD --logic-only
-```
+| **C#** | `.cs` | `method_declaration`, `class_declaration`, `interface_declaration` |
+| **Ruby** | `.rb` | `method`, `class`, `module` |
+| **PHP** | `.php` | `method_declaration`, `class_declaration`, `function_definition` |
 
 ## Installation
 
@@ -120,171 +95,112 @@ curl -fsSL https://raw.githubusercontent.com/JashT14/symtrace/main/install.sh | 
 iwr -useb https://raw.githubusercontent.com/JashT14/symtrace/main/install.ps1 | iex
 ```
 
-## Usage & Configuration
+## Command Usage & Examples
 
-```
-symtrace [REPO_PATH] [COMMIT_A] [COMMIT_B] [OPTIONS]
-```
-
-### Arguments
-
-| Argument      | Default | Description |
-|---------------|---------|-------------|
-| `REPO_PATH`   | `.`     | Path to local Git repository |
-| `COMMIT_A`    | `HEAD~1`| Older commit ref, tag, or branch |
-| `COMMIT_B`    | Working Tree | Newer commit ref, tag, or branch (optional) |
-
-### Options
-
-| Flag | Short | Default | Description |
-| ------ | ------- | --------- | ------------- |
-| `--staged` / `--cached` | | off | Compare staged index against `COMMIT_A` |
-| `--path <GLOB>` | `-p` | | Filter files using path glob pattern (e.g. `"src/**/*.rs"`) |
-| `--color <WHEN>` | | `auto` | Terminal color controls (`auto`, `always`, `never`) |
-| `--no-pager` | | off | Disable piping output to shell pager (`$PAGER`) |
-| `--logic-only` | | off | Ignore comments and whitespace-only nodes |
-| `--json` | | off | Emit machine-readable JSON output |
-| `--no-incremental` | | off | Disable incremental AST parsing |
-| `--max-file-size <BYTES>` | | 5242880 | Skip files larger than specified bytes (5 MiB default) |
-| `--max-ast-nodes <N>` | | 200000 | Skip files with more AST nodes than specified |
-| `--max-recursion-depth <N>` | | 2048 | Maximum AST parser recursion depth |
-| `--parse-timeout-ms <MS>` | | 2000 | Per-file parse timeout in ms (0 = disabled) |
-| `--help` | `-h` | | Print help |
-| `--version` | `-V` | | Print version |
-
-### Subcommands
-
-#### Native Git Diff Driver (`git-diff-driver`)
-
-Configure `symtrace` as a native `git diff` driver for specific file types or entire repositories:
+### 1. Basic Diff Execution
 
 ```bash
-# Configure Git driver command
-git config diff.symtrace.command "symtrace git-diff-driver"
+# Compare uncommitted working tree changes against HEAD in current directory
+symtrace
 
-# Set file attributes in .gitattributes
-echo "*.rs diff=symtrace" >> .gitattributes
-echo "*.js diff=symtrace" >> .gitattributes
+# Compare staged changes (git add) against HEAD
+symtrace . HEAD --staged
+
+# Compare two specific commits or branches
+symtrace . main feature-branch
+symtrace . HEAD~1 HEAD
 ```
 
-Now running standard `git diff` automatically renders semantic AST diffs.
+### 2. Interactive Terminal UI (TUI)
 
-### Configuration File (`.symtracerc` / `symtrace.toml`)
-
-`symtrace` automatically loads configuration from repository root `.symtracerc` or `symtrace.toml`, or user home config (`~/.config/symtrace/symtrace.toml`). Precedence order: **CLI Flags > Repository Config > User Config > Defaults**.
-
-Sample configuration file:
-
-```toml
-[default]
-logic_only = false
-json = false
-no_incremental = false
-no_pager = false
-
-[limits]
-max_file_size = 10485760     # 10 MiB
-max_ast_nodes = 500000       # 500,000 nodes
-max_recursion_depth = 2048
-parse_timeout_ms = 3000
-
-[output]
-color = "auto"
+```bash
+# Launch interactive terminal inspector with arrow-key controls
+symtrace tui HEAD~1 HEAD
 ```
 
-## How It Works
+### 3. File & Path Filtering
 
-```
-Repository Target Resolution ──► Dual-Path Git File Changes ──► Path Glob Filtering
- (Commits / Index / Work)        (Old & New Path Pairs)          (--path "src/**/*.rs")
-           │                                                               │
-           ▼                                                               ▼
- Bounded TreeCache LRU ◄────── Incremental AST Parsing ◄───── Versioned AST Cache
-  (Cap: 500 trees)             (BLAKE3 Hash Reuse)           (Blob + Limits Key)
-           │
-           ▼
- 5-Phase AST Matching ───────► Deep BFS Symbol Tracking ─────► Output Formats
- (Parallel via Rayon)          (5-Level Name Resolution)     (ANSI / Pager / JSON)
+```bash
+# Restrict AST diffing to Rust source files in src/
+symtrace . HEAD~1 HEAD --path "src/**/*.rs"
+
+# Restrict AST diffing to JavaScript/TypeScript files
+symtrace . HEAD~1 HEAD -p "**/*.{js,ts}"
 ```
 
-### Architecture Overview
+### 4. Ignoring Comments & Whitespace
 
-| Module | Responsibility |
-| -------- | ---------------- |
-| `main.rs` | Pipeline orchestration, target resolution, subcommand handling, timing |
-| `cli.rs` | CLI argument definitions (`clap`), positional defaults, flags |
-| `git_layer.rs` | Repository access (`libgit2`), dual-path rename extraction, index/workdir diffs |
-| `language.rs` | Extension matching for 9 supported languages/formats |
-| `ast_builder.rs` | Tree-sitter parsing, arena allocation (`bumpalo`), limits verification |
-| `ast_cache.rs` | Two-tier AST cache (in-memory LRU + versioned on-disk storage with limits hash) |
-| `incremental_parse.rs` | Bounded `TreeCache` LRU (500 capacity), minimal edit computation |
-| `node_identity.rs` | 4-hash BLAKE3 identity computation per node |
-| `tree_diff.rs` | Parallel 5-phase AST node matching algorithm |
-| `semantic_similarity.rs` | Structural, token, and complexity similarity calculation |
-| `symbol_tracking.rs` | Deep BFS symbol extraction & cross-file movement tracking |
-| `refactor_detection.rs` | Refactor pattern detection (extract method, move, rename) |
-| `commit_classification.rs` | Commit auto-classification (feature, refactor, cleanup, etc.) |
-| `pager.rs` | Interactive terminal detection and `$PAGER` process routing (`less -RFX`) |
-| `config.rs` | Hierarchical `.symtracerc` / `symtrace.toml` TOML config loader |
-| `output.rs` | ANSI color renderer and structured JSON formatter |
-| `types.rs` | Shared domain data structures and `FileChange` dual-path representations |
+```bash
+# Evaluate strictly logic-only AST nodes (ignores all comments & whitespace)
+symtrace . HEAD~1 HEAD --logic-only
+```
 
-## Performance & Empirical Benchmarks
+### 5. Multi-Format Reporting & Export
 
-Tested on a release build (`LLVM -O3`, LTO enabled) against the local `express` repository (`d:\rust_playground\express`):
+```bash
+# Generate a White-Mode HTML report (symtrace_report.html) and open in default browser
+symtrace . HEAD~1 HEAD --format html
 
-| Scenario | Mode / Command | Processed Files | AST Nodes | Parse Time | Diff Time | Total Time | Speedup Factor |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Cold AST Parse** | `symtrace express HEAD~1 HEAD` (Cold) | 2 | 6,011 | 32.21 ms | 0.94 ms | 86.77 ms | Baseline |
-| **Warm Cache Hit** | `symtrace express HEAD~1 HEAD` (Warm) | 2 | 6,011 | 3.77 ms | 1.24 ms | 22.21 ms | **3.91× faster** |
-| **JSON Output** | `symtrace express HEAD~1 HEAD --json` | 2 | 6,011 | 3.66 ms | 1.00 ms | 18.38 ms | **4.72× faster** |
-| **Working Tree Diff** | `symtrace express HEAD` (Single Commit) | 0 | 0 | 0.01 ms | 0.00 ms | 142.88 ms | N/A |
-| **Full Test Suite** | `cargo test --all` (166 tests) | N/A | ~65,000 | N/A | N/A | **90.00 ms** (0.09s) | **166 tests / 90ms** |
+# Emit high-level semantic summary table
+symtrace . HEAD~1 HEAD --stat
 
-## Security & Supply Chain
+# Output machine-readable JSON for CI pipelines
+symtrace . HEAD~1 HEAD --format json
 
-- **Zero Unsafe Rust** — Enforced via `#![deny(unsafe_code)]` in `Cargo.toml`.
-- **Zero Network Access** — Fully offline, no telemetry, no HTTP/TCP dependencies.
-- **Process Isolation** — Shell pager executed directly via explicit argument vectors (no `sh -c` / `cmd.exe /c` shell evaluation).
-- **Path Traversal Protection** — Repository paths canonicalized with directory verification prior to Git access.
-- **Resource Limits & Fuzzing** — Hard bounds on file size, node count, recursion depth, and parse timeouts fuzzed via `cargo-fuzz`.
-- **Cosign & Provenance** — Release assets signed keylessly via Sigstore/Cosign OIDC with SPDX SBOM (`symtrace.spdx.json`) and GitHub Artifact Attestations.
+# Output OASIS SARIF v2.1.0 JSON schema for GitHub Code Scanning
+symtrace . HEAD~1 HEAD --format sarif
+```
 
-See [SECURITY.md](SECURITY.md) for full security documentation.
+### 6. Pre-Commit Verification & CI Quality Gates
 
-## Dependencies
+```bash
+# Exits with status code 1 if structural semantic changes are detected
+symtrace . HEAD~1 HEAD --check
+```
 
-| Crate | Version | Purpose |
-| ------- | --------- | --------- |
-| `clap` | `=4.5.60` | CLI argument parsing |
-| `git2` | `=0.19.0` | libgit2 bindings for Git repository access |
-| `tree-sitter` | `=0.25.10` | Parser framework |
-| `tree-sitter-rust` | `=0.24.0` | Rust language grammar |
-| `tree-sitter-javascript` | `=0.25.0` | JavaScript language grammar |
-| `tree-sitter-typescript` | `=0.23.2` | TypeScript language grammar |
-| `tree-sitter-python` | `=0.25.0` | Python language grammar |
-| `tree-sitter-java` | `=0.23.5` | Java language grammar |
-| `tree-sitter-c` | `=0.23.4` | C language grammar |
-| `tree-sitter-cpp` | `=0.23.4` | C++ language grammar |
-| `tree-sitter-go` | `=0.23.4` | Go language grammar |
-| `tree-sitter-json` | `=0.24.8` | JSON language grammar |
-| `blake3` | `=1.8.3` | SIMD-optimized BLAKE3 hashing for node identity |
-| `serde` / `serde_json` | `=1.0.228` / `=1.0.149` | Serde JSON serialization |
-| `bincode` | `=1.3.3` | Bounded binary serialization for AST cache |
-| `rayon` | `=1.11.0` | Multi-threaded parallel parsing & diffing |
-| `lru` | `=0.12.5` | In-memory LRU cache |
-| `bumpalo` | `=3.20.2` | Arena allocator for zero-overhead AST construction |
-| `globset` | `=0.4.15` | Glob pattern matching for path filtering |
-| `toml` | `=0.8.23` | TOML parser for `.symtracerc` configuration loader |
-| `colored` | `=2.2.0` | ANSI terminal styling |
-| `anyhow` | `=1.0.102` | Error handling |
-| `proptest` | `=1.5.0` | (dev-dependency) Property-based testing framework |
+## Subcommands & Integration
 
-All dependencies are strictly pinned (`=x.y.z`). See [Cargo.toml](Cargo.toml) for details.
+### Interactive TUI (`symtrace tui`)
 
-## Contributing
+Launch an interactive terminal inspector:
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+- `Up` / `Down` Arrow keys to scroll files and operations.
+- `Right` / `Left` Arrow keys or `Tab` to switch focus pane.
+- `q` or `Esc` to exit cleanly.
+
+### Native 3-Way AST Merge Driver (`symtrace merge-driver`)
+
+Configure `symtrace` as a native 3-way merge driver in `.gitconfig`:
+
+```bash
+git config merge.symtrace.name "SymTrace 3-Way AST Merge Driver"
+git config merge.symtrace.driver "symtrace merge-driver %O %A %B %P"
+```
+
+### Flexible Export Formats (`--format <FMT>`)
+
+Supports `--format ansi`, `--format json`, `--format jsonl`, `--format markdown`, `--format html`, and `--format sarif`.
+
+## Frequently Asked Questions (FAQ)
+
+### Does `symtrace` replace standard Git commands?
+
+No. `symtrace` operates alongside Git as a non-destructive analysis tool. Standard `git diff` remains fully functional. `symtrace` provides a higher-level structural perspective during code reviews and complex refactoring audits.
+
+### Is source code processed locally or sent to a cloud server?
+
+All analysis runs 100% locally on your machine. `symtrace` is completely offline, collects zero telemetry, and performs zero network requests.
+
+### How do I use `symtrace` inside VS Code?
+
+Install the **Symtrace for VS Code** extension from the VS Code Marketplace. It integrates a dedicated sidebar panel, inline decorations, and side-by-side diff views directly within your editor.
+
+## Additional Documentation
+
+- [TECHNICAL_SPECIFICATIONS.md](TECHNICAL_SPECIFICATIONS.md) - Comprehensive technical reference.
+- [SECURITY.md](SECURITY.md) - Security policy & supply chain guarantees.
+- [BENCHMARKS.md](BENCHMARKS.md) - Performance benchmark reports.
+- [CHANGELOG.md](CHANGELOG.md) - Version release history & changelog.
 
 ## License
 

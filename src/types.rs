@@ -13,6 +13,10 @@ pub enum SupportedLanguage {
     Cpp,
     Go,
     Json,
+    CSharp,
+    Ruby,
+    Php,
+    Rust2024,
 }
 
 impl std::fmt::Display for SupportedLanguage {
@@ -27,6 +31,10 @@ impl std::fmt::Display for SupportedLanguage {
             Self::Cpp => write!(f, "C++"),
             Self::Go => write!(f, "Go"),
             Self::Json => write!(f, "JSON"),
+            Self::CSharp => write!(f, "C#"),
+            Self::Ruby => write!(f, "Ruby"),
+            Self::Php => write!(f, "PHP"),
+            Self::Rust2024 => write!(f, "Rust 2024"),
         }
     }
 }
@@ -150,6 +158,7 @@ impl std::fmt::Display for EntityType {
 // ── Operation Record ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationRecord {
     #[serde(rename = "type")]
     pub op_type: OperationType,
@@ -166,6 +175,7 @@ pub struct OperationRecord {
 // ── Diff Output (JSON Schema) ────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileDiff {
     pub file_path: String,
     pub operations: Vec<OperationRecord>,
@@ -174,6 +184,7 @@ pub struct FileDiff {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffSummary {
     pub total_files: usize,
     pub moves: usize,
@@ -184,6 +195,7 @@ pub struct DiffSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PerformanceMetrics {
     pub total_files_processed: usize,
     pub total_nodes_compared: u64,
@@ -199,6 +211,7 @@ pub struct PerformanceMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffOutput {
     pub repository: String,
     pub commit_a: String,

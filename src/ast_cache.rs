@@ -26,6 +26,16 @@ pub struct CacheKey {
     pub limits_hash: u64,
 }
 
+impl CacheKey {
+    pub fn new(blob_hash: impl Into<String>, logic_only: bool, limits_hash: u64) -> Self {
+        Self {
+            blob_hash: blob_hash.into(),
+            logic_only,
+            limits_hash,
+        }
+    }
+}
+
 /// Stored payload for a cached AST entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CacheEntry {
@@ -160,6 +170,19 @@ impl AstCache {
         // Write to in-memory LRU
         let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
         mem.put(key, entry);
+    }
+
+    /// Zero-Copy cache lookup: resolves AST directly by Git blob OID without requiring
+    /// prior content reading or string allocations.
+    pub fn get_by_oid(&self, blob_hash: &str, logic_only: bool, limits_hash: u64) -> Option<CacheEntry> {
+        let key = CacheKey::new(blob_hash, logic_only, limits_hash);
+        self.get(&key)
+    }
+
+    /// Convenience put method using Git blob OID parameters.
+    pub fn put_by_oid(&self, blob_hash: impl Into<String>, logic_only: bool, limits_hash: u64, entry: CacheEntry) {
+        let key = CacheKey::new(blob_hash, logic_only, limits_hash);
+        self.put(key, entry);
     }
 
     /// Build a deterministic disk file path for a cache key.

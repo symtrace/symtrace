@@ -1,4 +1,4 @@
-# Contributing to symtrace (v0.3.0)
+# Contributing to symtrace (v0.4.0)
 
 Thank you for your interest in contributing to `symtrace`.
 
@@ -10,8 +10,6 @@ Thank you for your interest in contributing to `symtrace`.
 4. Run `cargo test --all` to ensure all 166 unit, property-based (`proptest`), and differential tests pass
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, and release configuration.
-
----
 
 ## Making Changes
 
@@ -26,8 +24,6 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, an
 .\build.ps1 -Target production   # Windows
 ```
 
----
-
 ## Code & Security Standards
 
 - **Formatting** — all code must pass `cargo fmt --all -- --check`
@@ -37,8 +33,6 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, an
 - **Pinned Dependencies** — new dependencies must use exact version pinning (`=x.y.z`)
 - **Language Support** — changes affecting AST parsing must verify compatibility across all 9 supported languages/formats (Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, and JSON)
 
----
-
 ## Pull Requests
 
 - Keep PRs focused on a single change or feature area
@@ -46,21 +40,15 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, an
 - Reference any related issue numbers
 - Ensure all CI checks (format, clippy, test suite, security provenance) pass cleanly before requesting review
 
----
-
 ## Reporting Issues
 
 - Use GitHub Issues for bug reports and feature requests
 - Include steps to reproduce for bugs
 - Include the output of `symtrace --version` and your operating system / environment details
 
----
-
 ## Security
 
 See [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT_V0.3.0.md](SECURITY_AUDIT_V0.3.0.md) for security policies, audit details, and vulnerability reporting.
-
----
 
 ## License
 

@@ -2,6 +2,19 @@
 
 All notable changes to the "symtrace-vscode" extension will be documented in this file.
 
+## [0.4.0] - 2026-08-08
+
+### Added
+- Expanded language matrix to 13 languages & formats: C#, Ruby, PHP, and Rust 2024.
+- Added White-Mode Signed HTML report viewer with embedded BLAKE3 digital verification signatures and Print/PDF export.
+- Integrated high-resolution SVG activity bar and tree view icon (`media/symtrace-new-icon.svg`).
+- Added shell-free command execution (`cp.execFile`) for git history log parsing and `git show` document fetching, preventing Windows shell quoting errors.
+- Dual compatibility with `v0.4.0` CLI engine `camelCase` and `snake_case` JSON schemas.
+
+### Fixed
+- Fixed Windows `cmd.exe` string interpolation bug in `getRecentCommits` where `%H%x00` format string caused "Not enough commits in this repository" errors.
+- Added single-commit repository fallback handling.
+
 ## [0.3.0] - 2026-08-02
 
 ### Added

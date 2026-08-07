@@ -53,20 +53,31 @@ jobs:
         run: |
           tar -czvf ${{ matrix.artifact_name }} -C target/${{ matrix.target }}/release ${{ matrix.asset_name }}
 
-      - name: Create Release Archive (Windows)
+      - name: Create Release Archive & Standalone Binary (Windows)
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
           Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.asset_name }}" -DestinationPath "${{ matrix.artifact_name }}"
+          Copy-Item -Path "target/${{ matrix.target }}/release/${{ matrix.asset_name }}" -Destination "symtrace.exe"
 
-      - name: Upload Artifact
+      - name: Upload Linux Archive Artifact
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: linux-tarball
           path: ${{ matrix.artifact_name }}
 
+      - name: Upload Windows Artifacts
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            ${{ matrix.artifact_name }}
+            symtrace.exe
+
   release:
-    name: Provenance, Cosign & Immutable Release
+    name: Immutable GitHub Release & Verification
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -76,44 +87,24 @@ jobs:
       - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts
+          path: ./release-assets
           merge-multiple: true
 
       - name: Generate SHA256 Checksums
         run: |
-          cd ./artifacts
+          cd ./release-assets
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
-
-      - name: Install Cosign for Blob Signing
-        uses: sigstore/cosign-installer@v3.5.0
-
-      - name: Generate SBOM (Software Bill of Materials)
-        uses: anchore/sbom-action@v0.16.0
-        with:
-          format: spdx-json
-          output-file: ./artifacts/symtrace.spdx.json
-
-      - name: Sign Release Artifacts & Checksums with Cosign
-        env:
-          COSIGN_EXPERIMENTAL: "1"
-        run: |
-          cd ./artifacts
-          for file in *; do
-            if [ -f "$file" ]; then
-              cosign sign-blob --yes "$file" --output-signature "$file.sig" --output-certificate "$file.pem"
-            fi
-          done
 
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v1
         with:
-          subject-path: './artifacts/*'
+          subject-path: './release-assets/*'
 
-      - name: Create Immutable GitHub Release
+      - name: Create Clean GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./artifacts/*
+          files: ./release-assets/*
           generate_release_notes: true
           draft: false
           prerelease: false

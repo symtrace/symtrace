@@ -37,6 +37,7 @@ lru = "=0.12.5"
 bumpalo = { version = "=3.20.2", features = ["collections"] }
 globset = "=0.4.15"
 toml = "=0.8.23"
+crossterm = "=0.28.1"
 
 [dev-dependencies]
 proptest = "=1.5.0"

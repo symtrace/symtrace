@@ -51,8 +51,10 @@ export class SymtraceRunner {
         }
         try {
           const result: DiffOutput = JSON.parse(stdout);
+          const totalFiles = result.summary?.totalFiles ?? result.summary?.total_files ?? result.files.length;
+          const totalMs = result.performance?.totalTimeMs ?? result.performance?.total_time_ms ?? 0;
           this.logger.info(
-            `Analysis complete: ${result.summary.total_files} files, ${result.performance.total_time_ms.toFixed(1)}ms`
+            `Analysis complete: ${totalFiles} files, ${totalMs.toFixed(1)}ms`
           );
           resolve(result);
         } catch (e) {
@@ -81,7 +83,19 @@ export class SymtraceRunner {
     commitB: string,
     config: SymtraceConfig
   ): string[] {
-    const args = [repoPath, commitA, commitB, "--json"];
+    const args = ["-r", repoPath];
+
+    if (commitB === "STAGED") {
+      args.push(commitA, "--staged");
+    } else if (commitB === "WORKTREE") {
+      args.push(commitA);
+    } else if (commitA && commitB) {
+      args.push(commitA, commitB);
+    } else if (commitA) {
+      args.push(commitA);
+    }
+
+    args.push("--format", "json");
 
     if (config.logicOnly) {
       args.push("--logic-only");

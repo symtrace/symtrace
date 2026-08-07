@@ -24,8 +24,9 @@ export class GitContentProvider implements vscode.TextDocumentContentProvider {
   ): Promise<string> {
     const normalizedPath = filePath.replace(/\\/g, "/");
     return new Promise((resolve) => {
-      cp.exec(
-        `git show ${commit}:${normalizedPath}`,
+      cp.execFile(
+        "git",
+        ["show", `${commit}:${normalizedPath}`],
         { cwd: repoPath, maxBuffer: 10 * 1024 * 1024, encoding: "utf8" },
         (err, stdout) => {
           if (err) {

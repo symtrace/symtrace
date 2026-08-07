@@ -2,7 +2,7 @@
   "name": "symtrace-vscode",
   "displayName": "Symtrace for VS Code",
   "description": "Semantic diff viewer powered by symtrace AST analysis",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "JashT14",
   "license": "MIT",
   "repository": {
@@ -20,7 +20,7 @@
     "workspaceContains:.git"
   ],
   "main": "./dist/extension.js",
-  "icon": "media/symtrace-logo.png",
+  "icon": "media/symtrace-new-icon.png",
   "contributes": {
     "commands": [
       {
@@ -53,7 +53,7 @@
         {
           "id": "symtrace",
           "title": "Symtrace",
-          "icon": "media/symtrace-icon-512.png"
+          "icon": "media/symtrace-new-icon.svg"
         }
       ]
     },
@@ -62,7 +62,7 @@
         {
           "id": "symtrace.resultsTree",
           "name": "Diff Results",
-          "icon": "media/symtrace-results-icon.png"
+          "icon": "media/symtrace-new-icon.svg"
         }
       ]
     },

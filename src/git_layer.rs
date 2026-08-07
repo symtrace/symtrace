@@ -7,6 +7,47 @@ use rayon::prelude::*;
 
 use crate::types::{ChangeStatus, FileChange};
 
+/// Thread-safe reader for git blobs reusing thread-local `Repository` instances.
+///
+/// Prevents redundant repository opening (`Repository::open`) across worker threads
+/// during parallel blob extraction.
+pub struct SharedBlobReader {
+    repo_path: String,
+}
+
+impl SharedBlobReader {
+    pub fn new(repo_path: impl Into<String>) -> Self {
+        Self {
+            repo_path: repo_path.into(),
+        }
+    }
+
+    /// Read blob content by OID, reusing a thread-local Repository handle.
+    pub fn read_blob(&self, oid: git2::Oid) -> Result<Option<String>> {
+        thread_local! {
+            static REPO_CACHE: std::cell::RefCell<Option<(String, Repository)>> = const { std::cell::RefCell::new(None) };
+        }
+
+        REPO_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+            let need_open = match cache_ref.as_ref() {
+                Some((path, _)) => path != &self.repo_path,
+                None => true,
+            };
+
+            if need_open {
+                let repo = Repository::open(&self.repo_path)
+                    .or_else(|_| Repository::discover(&self.repo_path))
+                    .with_context(|| format!("Failed to open repository at '{}'", self.repo_path))?;
+                *cache_ref = Some((self.repo_path.clone(), repo));
+            }
+
+            let repo = &cache_ref.as_ref().unwrap().1;
+            read_blob_by_oid(repo, oid)
+        })
+    }
+}
+
 /// Lightweight delta metadata collected in the sequential phase,
 /// before parallel content extraction.
 struct DeltaInfo {
@@ -33,13 +74,14 @@ pub fn get_changed_files(
     // ── Phase 1: collect delta metadata (sequential, fast) ───────────
     let deltas = {
         let repo = Repository::open(repo_path)
-            .with_context(|| format!("Failed to open git repository at '{}'", repo_path))?;
+            .or_else(|_| Repository::discover(repo_path))
+            .with_context(|| format!("Failed to open or discover git repository at '{}'", repo_path))?;
 
         let commit_a = resolve_commit(&repo, commit_a_ref)?;
         let tree_a = commit_a.tree().context("Failed to get tree for commit A")?;
 
         let mut diff_opts = git2::DiffOptions::new();
-        let diff = if let Some(cb_str) = commit_b_ref {
+        let mut diff = if let Some(cb_str) = commit_b_ref {
             if cb_str.eq_ignore_ascii_case("WORKING") || cb_str.eq_ignore_ascii_case("WORKTREE") {
                 repo.diff_tree_to_workdir_with_index(Some(&tree_a), Some(&mut diff_opts))
                     .context("Failed to compute diff between commit A and working tree")?
@@ -57,6 +99,9 @@ pub fn get_changed_files(
             repo.diff_tree_to_workdir_with_index(Some(&tree_a), Some(&mut diff_opts))
                 .context("Failed to compute diff between commit A and working tree")?
         };
+
+        // Enable native Git rename detection (find_similar)
+        let _ = diff.find_similar(None);
 
         let mut deltas = Vec::new();
 
@@ -115,22 +160,21 @@ pub fn get_changed_files(
     };
 
     // ── Phase 2: parallel blob / file extraction ──────────────────────
+    let blob_reader = SharedBlobReader::new(repo_path);
+
     let changes: Result<Vec<FileChange>> = deltas
         .par_iter()
         .map(|delta| {
-            let repo = Repository::open(repo_path)
-                .context("Failed to open repo for parallel blob read")?;
-
             let old_blob_hash = delta.old_oid.map(|o| o.to_string());
             let new_blob_hash = delta.new_oid.map(|o| o.to_string());
 
             let old_content = match delta.old_oid {
-                Some(oid) => read_blob_by_oid(&repo, oid)?,
+                Some(oid) => blob_reader.read_blob(oid)?,
                 None => None,
             };
 
             let new_content = match delta.new_oid {
-                Some(oid) => read_blob_by_oid(&repo, oid)?,
+                Some(oid) => blob_reader.read_blob(oid)?,
                 None => {
                     // Working tree fallback if new_oid is zero (uncommitted working file)
                     if delta.status != ChangeStatus::Deleted {

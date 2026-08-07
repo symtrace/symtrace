@@ -1,5 +1,15 @@
 import * as vscode from "vscode";
-import { DiffOutput, FileDiff, OperationType } from "./types";
+import {
+  DiffOutput,
+  OperationType,
+  getFilePath,
+  getOpType,
+  getEntityType,
+  getOldLocation,
+  getNewLocation,
+  getSimilarityPercent,
+  getChangeIntensity,
+} from "./types";
 
 const decorationTypes: Record<OperationType, vscode.TextEditorDecorationType> = {
   INSERT: vscode.window.createTextEditorDecorationType({
@@ -85,9 +95,10 @@ function decorateEditor(editor: vscode.TextEditor): void {
   }
 
   const relativePath = vscode.workspace.asRelativePath(editor.document.uri);
-  const fileDiff = currentData.files.find(
-    (f) => f.file_path === relativePath || f.file_path === relativePath.replace(/\\/g, "/")
-  );
+  const fileDiff = currentData.files.find((f) => {
+    const pathStr = getFilePath(f);
+    return pathStr === relativePath || pathStr === relativePath.replace(/\\/g, "/");
+  });
 
   if (!fileDiff) {
     // Clear decorations for files not in the diff
@@ -107,7 +118,14 @@ function decorateEditor(editor: vscode.TextEditor): void {
   };
 
   for (const op of fileDiff.operations) {
-    const loc = op.type === "DELETE" ? op.old_location : op.new_location;
+    const opType = getOpType(op);
+    const entityType = getEntityType(op);
+    const oldLoc = getOldLocation(op);
+    const newLoc = getNewLocation(op);
+    const simPercent = getSimilarityPercent(op.similarity);
+    const intensity = getChangeIntensity(op.similarity);
+
+    const loc = opType === "DELETE" ? oldLoc : newLoc;
     if (!loc) {
       continue;
     }
@@ -122,12 +140,12 @@ function decorateEditor(editor: vscode.TextEditor): void {
     }
 
     const range = editor.document.lineAt(line).range;
-    let hoverMessage = `**${op.type}** ${op.entity_type}: ${op.details}`;
+    let hoverMessage = `**${opType}** ${entityType}: ${op.details}`;
     if (op.similarity) {
-      hoverMessage += `\n\nSimilarity: ${op.similarity.similarity_percent.toFixed(0)}% (${op.similarity.change_intensity})`;
+      hoverMessage += `\n\nSimilarity: ${simPercent.toFixed(0)}% (${intensity})`;
     }
 
-    groups[op.type].push({
+    groups[opType].push({
       range,
       hoverMessage: new vscode.MarkdownString(hoverMessage),
     });
