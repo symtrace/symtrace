@@ -1,6 +1,6 @@
 [package]
 name = "symtrace"
-version = "0.4.0"
+version = "0.4.5"
 edition = "2021"
 description = "A deterministic semantic diff engine using AST-based structural analysis"
 license = "MIT"

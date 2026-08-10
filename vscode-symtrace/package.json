@@ -2,7 +2,7 @@
   "name": "symtrace-vscode",
   "displayName": "Symtrace for VS Code",
   "description": "Semantic diff viewer powered by symtrace AST analysis",
-  "version": "0.4.0",
+  "version": "0.4.5",
   "publisher": "JashT14",
   "license": "MIT",
   "repository": {

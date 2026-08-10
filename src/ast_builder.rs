@@ -33,6 +33,12 @@ impl BumpaloRecycler {
     }
 }
 
+impl Default for BumpaloRecycler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Access thread-local BumpaloRecycler for parsing.
 pub fn with_recycler<F, R>(f: F) -> R
 where
