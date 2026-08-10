@@ -193,7 +193,7 @@ pub fn format_html(output: &DiffOutput) -> String {
     buf.push_str("  <div class=\"signature-card\">\n");
     buf.push_str("    <div><strong>DIGITAL AUDIT SIGNATURE [VERIFIED]:</strong></div>\n");
     buf.push_str(&format!("    <div>BLAKE3 Fingerprint: <code>{}</code></div>\n", fingerprint));
-    buf.push_str("    <div>Signer: SymTrace Engine v0.4.0 (Deterministic Cryptographic Hasher)</div>\n");
+    buf.push_str("    <div>Signer: SymTrace Engine v0.4.5 (Deterministic Cryptographic Hasher)</div>\n");
     buf.push_str("  </div>\n");
 
     buf.push_str("  <div class=\"disclaimer-card\">\n");
@@ -259,7 +259,7 @@ pub fn format_html(output: &DiffOutput) -> String {
     buf.push_str("  </div>\n");
 
     buf.push_str("  <div class=\"footer\">\n");
-    buf.push_str(&format!("    <div>Generated & Signed by SymTrace v0.4.0 &bull; Fingerprint: <code>{}</code></div>\n", &fingerprint[..16]));
+    buf.push_str(&format!("    <div>Generated & Signed by SymTrace v0.4.5 &bull; Fingerprint: <code>{}</code></div>\n", &fingerprint[..16]));
     buf.push_str("    <div style=\"font-size:0.75rem; margin-top:4px; color:var(--muted);\">Notice: Automated AST heuristic estimations may differ from actual developer intent or runtime execution.</div>\n");
     buf.push_str("  </div>\n");
     buf.push_str("</div>\n");

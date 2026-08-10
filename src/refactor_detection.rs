@@ -86,31 +86,28 @@ fn detect_extract_method(
         return patterns;
     }
 
+    let new_map: std::collections::HashMap<&str, &NodeDescriptor> = new_nodes.iter().map(|n| (n.name.as_str(), n)).collect();
+    let old_map: std::collections::HashMap<&str, &NodeDescriptor> = old_nodes.iter().map(|n| (n.name.as_str(), n)).collect();
+
     for inserted_name in &inserted_names {
-        // Find the new AST node for the inserted function
-        let inserted_node = new_nodes.iter().find(|n| n.name == *inserted_name);
-
-        for modified_name in &modified_names {
-            // Find the old AST node for the modified function
-            let original_node = old_nodes.iter().find(|n| n.name == *modified_name);
-
-            if let (Some(ins), Some(orig)) = (inserted_node, original_node) {
-                // Check subtree similarity between inserted function and
-                // the original (pre-modification) function body.
-                let sim = node_identity::structural_similarity(&ins.node, &orig.node);
-                if sim > EXTRACT_SUBTREE_THRESHOLD {
-                    patterns.push(RefactorPattern {
-                        kind: RefactorKind::ExtractMethod,
-                        description: format!(
-                            "Function '{}' appears to be extracted from '{}'",
-                            inserted_name, modified_name
-                        ),
-                        involved_entities: vec![
-                            inserted_name.to_string(),
-                            modified_name.to_string(),
-                        ],
-                        confidence: sim,
-                    });
+        if let Some(ins) = new_map.get(inserted_name) {
+            for modified_name in &modified_names {
+                if let Some(orig) = old_map.get(modified_name) {
+                    let sim = node_identity::structural_similarity(&ins.node, &orig.node);
+                    if sim > EXTRACT_SUBTREE_THRESHOLD {
+                        patterns.push(RefactorPattern {
+                            kind: RefactorKind::ExtractMethod,
+                            description: format!(
+                                "Function '{}' appears to be extracted from '{}'",
+                                inserted_name, modified_name
+                            ),
+                            involved_entities: vec![
+                                inserted_name.to_string(),
+                                modified_name.to_string(),
+                            ],
+                            confidence: sim,
+                        });
+                    }
                 }
             }
         }

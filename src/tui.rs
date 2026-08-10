@@ -42,7 +42,7 @@ pub fn run_tui_inspector(diff_output: &DiffOutput) -> Result<()> {
 
             // 1. Header Bar
             let header_str = format!(
-                " SYMTRACE TUI INSPECTOR v0.4.0 | Repo: {} | Comparing: {} -> {}",
+                " SYMTRACE TUI INSPECTOR v0.4.5 | Repo: {} | Comparing: {} -> {}",
                 diff_output.repository, diff_output.commit_a, diff_output.commit_b
             );
             queue!(
@@ -313,7 +313,7 @@ pub fn run_tui_inspector(diff_output: &DiffOutput) -> Result<()> {
 }
 
 fn render_static_tui(diff_output: &DiffOutput) -> Result<()> {
-    println!("[INFO] SymTrace TUI Inspector (Static Mode) v0.4.0");
+    println!("[INFO] SymTrace TUI Inspector (Static Mode) v0.4.5");
     println!("Repository: {}", diff_output.repository);
     println!("Comparing: {} -> {}", diff_output.commit_a, diff_output.commit_b);
     println!("Total Files: {}", diff_output.summary.total_files);

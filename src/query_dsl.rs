@@ -49,6 +49,7 @@ impl QueryEngine {
         for rule in &self.rules {
             for op in ops.iter_mut() {
                 if op.details.to_lowercase().contains(&rule.name.to_lowercase())
+                    || rule.query_src.to_lowercase().contains(&op.details.to_lowercase())
                     || op.details.contains("auth")
                     || op.details.contains("crypto")
                     || op.details.contains("verify")

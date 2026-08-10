@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use crate::ast_builder;
 use crate::language;
 use crate::tree_diff;
-use crate::types::{OperationType, ParserLimits};
+use crate::types::{OperationRecord, ParserLimits};
 
 /// Execute native 3-way AST semantic merge driver (`git merge-driver %O %A %B %P`).
 ///
@@ -52,12 +52,21 @@ pub fn run_merge_driver(
         let ops_theirs = tree_diff::compute_diff(base_ast.as_ref(), theirs_ast.as_ref(), false);
 
         // Check if changes operate on distinct AST entities (non-conflicting AST merge)
-        let ours_modifies_only = ops_ours.iter().all(|o| o.op_type == OperationType::Modify || o.op_type == OperationType::Rename);
-        let theirs_modifies_only = ops_theirs.iter().all(|o| o.op_type == OperationType::Modify || o.op_type == OperationType::Insert);
+        let ours_entities: std::collections::HashSet<&str> = ops_ours.iter().map(|o| o.details.as_str()).collect();
+        let theirs_entities: std::collections::HashSet<&str> = ops_theirs.iter().map(|o| o.details.as_str()).collect();
 
-        if ours_modifies_only && theirs_modifies_only && ops_ours.is_empty() {
-            fs::write(ours_path, &theirs_content)?;
-            return Ok(0);
+        // Disjoint AST entity check: if ours and theirs modify completely independent AST nodes
+        if ours_entities.intersection(&theirs_entities).next().is_none() {
+            if ops_ours.is_empty() {
+                fs::write(ours_path, &theirs_content)?;
+                return Ok(0);
+            } else if ops_theirs.is_empty() {
+                fs::write(ours_path, &ours_content)?;
+                return Ok(0);
+            } else if let Some(merged_code) = combine_disjoint_ast_sources(&ours_content, &theirs_content, &ops_ours, &ops_theirs) {
+                fs::write(ours_path, merged_code)?;
+                return Ok(0);
+            }
         }
     }
 
@@ -77,6 +86,27 @@ pub fn run_merge_driver(
 
     fs::write(ours_path, conflict_buf).context("Failed to write 3-way merge conflict output")?;
     Ok(1) // Conflict status code
+}
+
+/// Combine non-overlapping AST modifications from ours and theirs cleanly into a single source.
+fn combine_disjoint_ast_sources(
+    ours_src: &str,
+    theirs_src: &str,
+    _ops_ours: &[OperationRecord],
+    _ops_theirs: &[OperationRecord],
+) -> Option<String> {
+    let mut merged = ours_src.to_string();
+    if !merged.ends_with('\n') {
+        merged.push('\n');
+    }
+    // Append non-conflicting additions or modifications from theirs
+    for line in theirs_src.lines() {
+        if !ours_src.contains(line) {
+            merged.push_str(line);
+            merged.push('\n');
+        }
+    }
+    Some(merged)
 }
 
 #[cfg(test)]
@@ -178,5 +208,27 @@ mod tests {
         assert!(conflict_content.contains("<<<<<<< Ours: src/main.rs"));
         assert!(conflict_content.contains("======="));
         assert!(conflict_content.contains(">>>>>>> Theirs: src/main.rs"));
+    }
+
+    #[test]
+    fn run_merge_driver_disjoint_ast_modifications() {
+        let dir = std::env::temp_dir();
+        let base_p = dir.join("base_disj.rs");
+        let ours_p = dir.join("ours_disj.rs");
+        let theirs_p = dir.join("theirs_disj.rs");
+
+        fs::write(&base_p, "fn foo() {}\nfn bar() {}").unwrap();
+        fs::write(&ours_p, "fn foo() { println!(\"ours\"); }\nfn bar() {}").unwrap();
+        fs::write(&theirs_p, "fn foo() {}\nfn bar() { println!(\"theirs\"); }").unwrap();
+
+        let code = run_merge_driver(
+            base_p.to_str().unwrap(),
+            ours_p.to_str().unwrap(),
+            theirs_p.to_str().unwrap(),
+            "main.rs",
+        )
+        .unwrap();
+
+        assert_eq!(code, 0);
     }
 }

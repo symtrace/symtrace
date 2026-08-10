@@ -1,4 +1,4 @@
-# Contributing to symtrace (v0.4.0)
+# Contributing to symtrace (v0.4.5)
 
 Thank you for your interest in contributing to `symtrace`.
 
@@ -7,7 +7,7 @@ Thank you for your interest in contributing to `symtrace`.
 1. Fork and clone the repository (`https://github.com/JashT14/symtrace`)
 2. Install [Rust](https://www.rust-lang.org/tools/install) (edition 2021+) and a C compiler (for libgit2 and tree-sitter C grammars)
 3. Run `cargo build` to verify your setup
-4. Run `cargo test --all` to ensure all 166 unit, property-based (`proptest`), and differential tests pass
+4. Run `cargo test --workspace` to ensure all 190 unit, property-based (`proptest`), and differential tests pass
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, and release configuration.
 
@@ -48,7 +48,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, an
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT_V0.3.0.md](SECURITY_AUDIT_V0.3.0.md) for security policies, audit details, and vulnerability reporting.
+See [SECURITY.md](SECURITY.md) for security policies, audit details, and vulnerability reporting.
 
 ## License
 

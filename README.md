@@ -54,7 +54,7 @@ When `symtrace` analyzes a diff, operations are classified into five primary typ
 | **`[INSERT]`** | A new function, struct, class, or code block was added. | Declaring a new helper function `fn validate_token`. |
 | **`[DELETE]`** | A function, struct, class, or code block was removed. | Removing a deprecated legacy function. |
 
-## Features (v0.4.0)
+## Features (v0.4.5)
 
 - **Understands Code Structure:** Sees true code changes like moved functions or renamed variables without getting confused by formatting tweaks or comment updates.
 - **Multi-Language Support:** Works seamlessly across 13 popular languages & formats: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, JSON, C#, Ruby, PHP, and Rust 2024.

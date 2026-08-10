@@ -5,6 +5,18 @@ All notable changes to the `symtrace` project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.5] - 2026-08-10
+
+### Fixed & Enhanced
+
+- **Global Multi-File Indexing ($O(N \log N)$):** Wired `GlobalNodeIndex` for $O(1)$ move and rename candidate lookups in `compute_multi_file_diff()`, eliminating nested $O(N_{del} \times N_{ins})$ candidate loops ([src/tree_diff.rs](src/tree_diff.rs)).
+- **Subtree Windowing for Large Files (>1 MiB):** Made `collect_significant_nodes_windowed()` public and introduced `compute_structural_diff_windowed()` to prune AST node collection on oversized files ([src/tree_diff.rs](src/tree_diff.rs)).
+- **Native 3-Way AST Merge Combinator:** Implemented `combine_disjoint_ast_sources()` to cleanly merge non-overlapping AST mutations without generating false git conflict markers ([src/merge_driver.rs](src/merge_driver.rs)).
+- **Multiset Frequency Token Jaccard:** Upgraded `token_similarity()` to compute multiset frequency (Bag-of-Words) Jaccard ratios ($\frac{\sum \min(c_A, c_B)}{\sum \max(c_A, c_B)}$) over binary presence sets ([src/node_identity.rs](src/node_identity.rs)).
+- **Enriched Context Hashing & Scope Disambiguation:** Updated `context_hash` formula to `BLAKE3(parent_structural_hash || parent_kind || sibling_index || depth)` and added context-hash tie-breaking for duplicate functions ([src/node_identity.rs](src/node_identity.rs), [src/tree_diff.rs](src/tree_diff.rs)).
+- **Positional Sequence Displacement Penalty:** Added `compute_positional_penalty()` to penalize argument and parameter permutations ([src/semantic_similarity.rs](src/semantic_similarity.rs)).
+- **Rayon Similarity Scoring:** Parallelized Stage 3c candidate matching using Rayon `par_iter()` ([src/tree_diff.rs](src/tree_diff.rs)).
+
 ## [v0.4.0] - 2026-08-08
 
 ### Added

@@ -1,6 +1,6 @@
-# Development Guide — Symtrace v0.4.0
+# Development Guide — Symtrace v0.4.5
 
-This document describes the production-ready build, quality verification, and release development workflow for `symtrace` v0.4.0.
+This document describes the production-ready build, quality verification, and release development workflow for `symtrace` v0.4.5.
 
 ## Build System
 
@@ -104,12 +104,12 @@ Result: Fast, small, production-grade binary with minimal runtime overhead.
 
 ## Code Quality & Testing Suite Architecture
 
-`symtrace` v0.4.0 enforces a strict four-tier verification architecture:
+`symtrace` v0.4.5 enforces a strict four-tier verification architecture:
 
 ```
-1. Unit Tests (156 passing)       ──► Validate parser, diff engine, limits, config, and pagers
+1. Unit Tests (177 passing)       ──► Validate parser, diff engine, limits, config, and pagers
 2. Property Tests (proptest)      ──► Assert diff symmetry, determinism, and structural invariants
-3. Differential Tests              ──► Assert zero false positives vs git diff baseline
+3. Differential Tests (9 passing) ──► Assert zero false positives vs git diff baseline
 4. Fuzzing (cargo-fuzz)            ──► Validate parser resource limits under adversarial inputs
 ```
 

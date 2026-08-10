@@ -130,3 +130,44 @@ fn differential_cross_file_movement() {
     assert_eq!(tracking.cross_file_events[0].old_file, "src/mod_a.rs");
     assert_eq!(tracking.cross_file_events[0].new_file, "src/mod_b.rs");
 }
+
+// ── 3. v0.4.5 Specific Verification Tests ─────────────────────────────
+
+#[test]
+fn test_frequency_multiset_jaccard_token_similarity() {
+    let code_a = "fn foo() { let x = 100 + 100 + 100; }";
+    let code_b = "fn foo() { let x = 100 + 200 + 300; }";
+
+    let ast_a = parse_content(code_a, SupportedLanguage::Rust, false, &limits()).unwrap();
+    let ast_b = parse_content(code_b, SupportedLanguage::Rust, false, &limits()).unwrap();
+
+    let sim = symtrace::node_identity::token_similarity(&ast_a, &ast_b);
+    assert!(sim > 0.0 && sim < 1.0, "Expected multiset Jaccard score between 0.0 and 1.0, got {sim}");
+}
+
+#[test]
+fn test_oversized_file_windowed_collection() {
+    let code = "fn line1() {}\nfn line2() {}\nfn line3() {}\nfn line4() {}\n";
+    let ast = parse_content(code, SupportedLanguage::Rust, false, &limits()).unwrap();
+
+    let nodes = symtrace::tree_diff::collect_significant_nodes_windowed(
+        &ast,
+        &[],
+        2_000_000, // file_size > threshold (1 MiB)
+        Some(&[(0, 1)]), // changed window covers line 1 only
+    );
+
+    assert!(!nodes.is_empty());
+}
+
+#[test]
+fn test_positional_displacement_penalty() {
+    let old_code = "fn process(user: i32, account: i32) { save(user, account); }";
+    let new_code = "fn process(account: i32, user: i32) { save(account, user); }";
+
+    let ast_a = parse_content(old_code, SupportedLanguage::Rust, false, &limits()).unwrap();
+    let ast_b = parse_content(new_code, SupportedLanguage::Rust, false, &limits()).unwrap();
+
+    let penalty = symtrace::semantic_similarity::compute_positional_penalty(&ast_a, &ast_b);
+    assert!(penalty > 0.0, "Permuted parameter sequence must produce a positional displacement penalty");
+}

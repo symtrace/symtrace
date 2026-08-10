@@ -46,9 +46,12 @@ pub fn compute_similarity(old: &AstNode, new: &AstNode) -> SimilarityScore {
         1.0 - (cyclomatic_delta.unsigned_abs() as f64 / (old_cc + new_cc) as f64).min(1.0)
     };
 
-    let composite = structure_sim * STRUCTURE_WEIGHT
+    let penalty = compute_positional_penalty(old, new);
+
+    let composite = (structure_sim * STRUCTURE_WEIGHT
         + token_sim * TOKEN_WEIGHT
-        + complexity_factor * COMPLEXITY_WEIGHT;
+        + complexity_factor * COMPLEXITY_WEIGHT
+        - penalty).clamp(0.0, 1.0);
 
     let similarity_percent = (composite * 100.0).clamp(0.0, 100.0);
 
@@ -63,6 +66,27 @@ pub fn compute_similarity(old: &AstNode, new: &AstNode) -> SimilarityScore {
         similarity_percent,
         change_intensity,
     }
+}
+
+/// Compute a positional sequence displacement penalty when leaf tokens/parameters are permuted.
+pub fn compute_positional_penalty(old: &AstNode, new: &AstNode) -> f64 {
+    let tokens_a = node_identity::collect_normalised_tokens(old);
+    let tokens_b = node_identity::collect_normalised_tokens(new);
+    if tokens_a.is_empty() || tokens_b.is_empty() || tokens_a.len() != tokens_b.len() {
+        return 0.0;
+    }
+
+    let mut total_disp = 0usize;
+    for (i, t_a) in tokens_a.iter().enumerate() {
+        if let Some(j) = tokens_b.iter().position(|t_b| t_b == t_a) {
+            total_disp += (i as isize - j as isize).unsigned_abs();
+        }
+    }
+    let max_disp = tokens_a.len() * tokens_a.len();
+    if max_disp == 0 {
+        return 0.0;
+    }
+    0.20 * (total_disp as f64 / max_disp as f64)
 }
 
 // ── Intensity classification ─────────────────────────────────────────

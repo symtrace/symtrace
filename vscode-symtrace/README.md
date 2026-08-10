@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/JashT14/symtrace/main/vscode-symtrace/media/symtrace-banner.jpg" alt="symtrace banner" width="700">
 </p>
 
-# Symtrace for VS Code (v0.4.0)
+# Symtrace for VS Code (v0.4.5)
 
 Semantic diff viewer powered by AST analysis. Compare Git commits to see **what semantically changed** - functions moved, renamed, modified, inserted, or deleted - rather than just which lines changed.
 
@@ -26,7 +26,7 @@ Built on the [symtrace](https://github.com/JashT14/symtrace) CLI engine (Rust).
 - **Performance Metrics** - View parse time, diff time, and node counts in the sidebar
 - **Activity Bar Integration** - Dedicated Symtrace panel in the VS Code sidebar with SVG icon
 - **Git Commit Picker** - Interactive QuickPick UI for selecting commits from your git history
-- **Auto-download Binary** - 4-tier binary resolution with automatic GitHub releases download (`v0.4.0`)
+- **Auto-download Binary** - 4-tier binary resolution with automatic GitHub releases download (`v0.4.5`)
 - **Cancellable Analysis** - Progress notification with cancellation support during analysis
 
 ## Supported Languages
@@ -126,10 +126,10 @@ This produces deterministic, meaningful diffs that understand code structure rat
 ### Architecture
 
 ```
-VS Code Extension (v0.4.0)
+VS Code Extension (v0.4.5)
        │
        ├── extension.ts         ← Activation, command registration
-       ├── binary.ts            ← 4-tier binary resolution + GitHub auto-download (v0.4.0)
+       ├── binary.ts            ← 4-tier binary resolution + GitHub auto-download (v0.4.5)
        ├── runner.ts            ← Spawns symtrace CLI, parses JSON output
        ├── config.ts            ← Reads VS Code settings → CLI flags
        ├── commitPicker.ts      ← Git log QuickPick UI (two commits / with parent)
@@ -143,6 +143,11 @@ VS Code Extension (v0.4.0)
 ```
 
 ## Release Notes
+
+### 0.4.5
+
+- Aligned extension binary downloader with `v0.4.5` GitHub releases (`JashT14/symtrace`)
+- Full compatibility with multiset frequency Jaccard similarity and windowed AST diff schema
 
 ### 0.4.0
 
