@@ -23,7 +23,7 @@ impl QueryEngine {
             if let Ok(entries) = fs::read_dir(dir_path) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "scm") {
+                    if path.extension().is_some_and(|ext| ext == "scm") {
                         if let Ok(content) = fs::read_to_string(&path) {
                             let rule_name = path
                                 .file_stem()
@@ -47,14 +47,18 @@ impl QueryEngine {
             return;
         }
         for rule in &self.rules {
+            let warn_prefix = format!("[WARN] [{}]", rule.name);
             for op in ops.iter_mut() {
+                if op.details.starts_with(&warn_prefix) {
+                    continue;
+                }
                 if op.details.to_lowercase().contains(&rule.name.to_lowercase())
                     || rule.query_src.to_lowercase().contains(&op.details.to_lowercase())
                     || op.details.contains("auth")
                     || op.details.contains("crypto")
                     || op.details.contains("verify")
                 {
-                    op.details = format!("[WARN] [{}] {}", rule.name, op.details);
+                    op.details = format!("{} {}", warn_prefix, op.details);
                 }
             }
         }

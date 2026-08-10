@@ -208,9 +208,13 @@ fn extract_old_name_from_rename(details: &str) -> Option<&str> {
 
 /// From `"function_item renamed from 'old' to 'new'"`, extract `new`.
 fn extract_new_name_from_rename(details: &str) -> Option<&str> {
-    let marker = "to '";
-    let start = details.find(marker)? + marker.len();
-    let rest = &details[start..];
+    let old_marker = "from '";
+    let old_start = details.find(old_marker)? + old_marker.len();
+    let old_end = details[old_start..].find('\'')? + old_start;
+    let after_old = &details[old_end + 1..];
+    let new_marker = " to '";
+    let new_start = after_old.find(new_marker)? + new_marker.len();
+    let rest = &after_old[new_start..];
     let end = rest.find('\'')?;
     Some(&rest[..end])
 }

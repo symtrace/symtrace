@@ -293,14 +293,14 @@ pub fn compute_multi_file_diff(
                         ops.push(OperationRecord {
                             op_type: OperationType::Move,
                             entity_type: del_op.entity_type.clone(),
-                            old_location: Some(format!("{}", old_loc)),
+                            old_location: Some(old_loc.to_string()),
                             new_location: Some(new_loc_str),
                             details: format!("Moved to {}:L{}", new_path, matched_node.start_row + 1),
                             similarity: sim,
                         });
                     }
                     if let Some(ops) = file_ops.get_mut(new_path) {
-                        ops.retain(|o| &o.details != &ins_details);
+                        ops.retain(|o| o.details != ins_details);
                     }
                     resolved_inserts.insert(ins_details);
                     continue;
@@ -324,14 +324,14 @@ pub fn compute_multi_file_diff(
                             ops.push(OperationRecord {
                                 op_type: OperationType::Move,
                                 entity_type: del_op.entity_type.clone(),
-                                old_location: Some(format!("{}", old_loc)),
+                                old_location: Some(old_loc.to_string()),
                                 new_location: ins_op.new_location.as_ref().map(|loc| format!("{}:{}", new_path, loc)),
                                 details: format!("Moved to {}:{}", new_path, ins_op.new_location.as_deref().unwrap_or("")),
                                 similarity: sim,
                             });
                         }
                         if let Some(ops) = file_ops.get_mut(new_path) {
-                            ops.retain(|o| &o.details != &ins_op.details);
+                            ops.retain(|o| o.details != ins_op.details);
                         }
                         resolved_inserts.insert(ins_op.details.clone());
                         break;
