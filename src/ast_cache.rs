@@ -193,7 +193,7 @@ impl AstCache {
             return None;
         }
         let suffix = if key.logic_only { "_logic" } else { "" };
-        Some(dir.join(format!("{}{}.bin", key.blob_hash, suffix)))
+        Some(dir.join(format!("{}{}_{:x}.bin", key.blob_hash, suffix, key.limits_hash)))
     }
 
     /// Return cache statistics: (memory_entries, disk_entries)

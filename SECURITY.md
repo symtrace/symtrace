@@ -1,6 +1,6 @@
-# `symtrace` Security Policy & Audit Report - v0.4.0
+# `symtrace` Security Policy & Audit Report - v0.4.5
 
-**Audit Date:** August 2026 (`v0.4.0` Release Audit)  
+**Audit Date:** August 2026 (`v0.4.5` Release Audit)  
 **Audit Scope:** Entire codebase (`src/*.rs`, `tests/`, `fuzz/`, `Cargo.toml`, `.github/workflows/release.yml`) - manual review, static analysis, property-based testing, and fuzzing evaluation.
 
 ## Executive Summary

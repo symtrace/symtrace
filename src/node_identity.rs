@@ -34,7 +34,7 @@ pub fn compute_hashes(node: &mut AstNode, logic_only: bool) {
     // Bottom-up pass: structural_hash, content_hash, identity_hash
     compute_hashes_bottom_up(node, logic_only);
     // Top-down pass: context_hash
-    compute_context_hashes(node, &[0u8; 32], 0);
+    compute_context_hashes(node, &[0u8; 32], "", 0, 0);
 }
 
 /// Compute hashes with reuse from a previous AST for unchanged subtrees.
@@ -53,7 +53,7 @@ pub fn compute_hashes_incremental(
     logic_only: bool,
 ) -> u64 {
     let reused = compute_bottom_up_with_reuse(node, Some(old_node), changed_ranges, logic_only);
-    compute_context_hashes(node, &[0u8; 32], 0);
+    compute_context_hashes(node, &[0u8; 32], "", 0, 0);
     reused
 }
 
@@ -61,7 +61,7 @@ pub fn compute_hashes_incremental(
 ///
 /// A node is considered "unchanged" if its byte range [start_byte, end_byte)
 /// does not overlap any of the changed ranges AND it has a matching old node
-/// (same kind). For such nodes, the structural_hash, content_hash, and
+/// (same kind and child count). For such nodes, the structural_hash, content_hash, and
 /// identity_hash are copied from the old tree without recomputation.
 ///
 /// For changed nodes (or nodes without a matching old node), hashes are
@@ -76,10 +76,10 @@ fn compute_bottom_up_with_reuse(
     let is_changed =
         incremental_parse::overlaps_changed_ranges(node.start_byte, node.end_byte, changed_ranges);
 
-    // If unchanged and we have a matching old node, reuse hashes
+    // If unchanged and we have a matching old node (with identical child count to ensure structural stability), reuse hashes
     if !is_changed {
         if let Some(old) = old_node {
-            if old.kind == node.kind {
+            if old.kind == node.kind && old.children.len() == node.children.len() {
                 // Copy bottom-up hashes from old node
                 node.structural_hash = old.structural_hash;
                 node.content_hash = old.content_hash;
@@ -202,16 +202,25 @@ fn compute_hashes_bottom_up(node: &mut AstNode, logic_only: bool) {
     node.identity_hash = *id_hasher.finalize().as_bytes();
 }
 
-/// Top-down pass: compute context_hash = blake3(parent_structure_hash + depth).
-fn compute_context_hashes(node: &mut AstNode, parent_structural_hash: &[u8; 32], depth: u32) {
+/// Top-down pass: compute context_hash = blake3(parent_structure_hash + parent_kind + sibling_index + depth).
+fn compute_context_hashes(
+    node: &mut AstNode,
+    parent_structural_hash: &[u8; 32],
+    parent_kind: &str,
+    sibling_index: u32,
+    depth: u32,
+) {
     let mut ctx_hasher = blake3::Hasher::new();
     ctx_hasher.update(parent_structural_hash);
+    ctx_hasher.update(parent_kind.as_bytes());
+    ctx_hasher.update(&sibling_index.to_le_bytes());
     ctx_hasher.update(&depth.to_le_bytes());
     node.context_hash = *ctx_hasher.finalize().as_bytes();
 
     let my_structural_hash = node.structural_hash;
-    for child in &mut node.children {
-        compute_context_hashes(child, &my_structural_hash, depth + 1);
+    let my_kind = node.kind.clone();
+    for (i, child) in node.children.iter_mut().enumerate() {
+        compute_context_hashes(child, &my_structural_hash, &my_kind, i as u32, depth + 1);
     }
 }
 
@@ -236,21 +245,43 @@ pub fn structural_similarity(a: &AstNode, b: &AstNode) -> f64 {
 
 /// Compute the *token similarity* between two AST nodes.
 ///
-/// This is the Jaccard overlap of normalised leaf tokens.
+/// Upgraded in v0.4.5 to Multiset Frequency (Bag-of-Words) Jaccard ratio:
+/// Sim = sum(min(count_A, count_B)) / sum(max(count_A, count_B))
 pub fn token_similarity(a: &AstNode, b: &AstNode) -> f64 {
     let tokens_a = collect_normalised_tokens(a);
     let tokens_b = collect_normalised_tokens(b);
     if tokens_a.is_empty() && tokens_b.is_empty() {
         return 1.0;
     }
-    let set_a: HashSet<&str> = tokens_a.iter().map(|s| s.as_str()).collect();
-    let set_b: HashSet<&str> = tokens_b.iter().map(|s| s.as_str()).collect();
-    let intersection = set_a.intersection(&set_b).count();
-    let union = set_a.union(&set_b).count();
-    if union == 0 {
+
+    let mut freq_a = std::collections::HashMap::new();
+    let mut freq_b = std::collections::HashMap::new();
+
+    for t in &tokens_a {
+        *freq_a.entry(t.as_str()).or_insert(0u32) += 1;
+    }
+    for t in &tokens_b {
+        *freq_b.entry(t.as_str()).or_insert(0u32) += 1;
+    }
+
+    let mut keys: HashSet<&str> = HashSet::new();
+    keys.extend(freq_a.keys());
+    keys.extend(freq_b.keys());
+
+    let mut intersection_sum = 0u32;
+    let mut union_sum = 0u32;
+
+    for k in keys {
+        let count_a = freq_a.get(k).copied().unwrap_or(0);
+        let count_b = freq_b.get(k).copied().unwrap_or(0);
+        intersection_sum += count_a.min(count_b);
+        union_sum += count_a.max(count_b);
+    }
+
+    if union_sum == 0 {
         return 1.0;
     }
-    intersection as f64 / union as f64
+    intersection_sum as f64 / union_sum as f64
 }
 
 /// Compute the weighted composite similarity score for the matching model.
@@ -285,7 +316,7 @@ fn collect_structural_hashes(node: &AstNode) -> HashSet<[u8; 32]> {
     set
 }
 
-fn collect_normalised_tokens(node: &AstNode) -> Vec<String> {
+pub fn collect_normalised_tokens(node: &AstNode) -> Vec<String> {
     if node.children.is_empty() {
         if is_identifier_kind(&node.kind) {
             vec!["<IDENTIFIER>".to_string()]

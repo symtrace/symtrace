@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use rayon::prelude::*;
 
 use crate::node_identity;
 use crate::semantic_similarity;
@@ -7,8 +8,7 @@ use crate::types::{AstNode, EntityType, OperationRecord, OperationType};
 // ── Internal node representation for diff matching ───────────────────
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct SignificantNode {
+pub struct SignificantNode {
     id: u64,
     kind: String,
     name: String,
@@ -36,6 +36,7 @@ enum MatchType {
 
 /// Reference to a significant AST node within a multi-file repository context.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct GlobalNodeRef {
     pub file_path: String,
     pub node_id: u64,
@@ -51,6 +52,7 @@ pub struct GlobalNodeRef {
 }
 
 /// Global multi-file index over AST nodes across all modified files in a commit or diff.
+#[allow(dead_code)]
 pub struct GlobalNodeIndex {
     /// structural_hash → nodes across all files
     pub by_structural_hash: HashMap<[u8; 32], Vec<GlobalNodeRef>>,
@@ -60,6 +62,7 @@ pub struct GlobalNodeIndex {
     pub by_kind_name: HashMap<String, HashMap<String, Vec<GlobalNodeRef>>>,
 }
 
+#[allow(dead_code)]
 impl GlobalNodeIndex {
     /// Build a global node index from a collection of file paths and their AST trees.
     pub fn build(files: &[(&str, &AstNode)]) -> Self {
@@ -110,6 +113,46 @@ impl GlobalNodeIndex {
             by_identity_hash,
             by_kind_name,
         }
+    }
+
+    /// O(1) indexed lookup to locate cross-file move target candidates.
+    pub fn find_candidate_for_move(&self, kind: &str, name: &str, exclude_file: &str) -> Option<&GlobalNodeRef> {
+        if !name.is_empty() {
+            if let Some(name_map) = self.by_kind_name.get(kind) {
+                if let Some(candidates) = name_map.get(name) {
+                    for candidate in candidates {
+                        if candidate.file_path != exclude_file {
+                            return Some(candidate);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// O(1) indexed lookup by structural hash across files.
+    pub fn find_candidate_by_structural_hash(&self, structural_hash: &[u8; 32], exclude_file: &str) -> Option<&GlobalNodeRef> {
+        if let Some(candidates) = self.by_structural_hash.get(structural_hash) {
+            for candidate in candidates {
+                if candidate.file_path != exclude_file {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    }
+
+    /// O(1) indexed lookup by identity hash across files (cross-file renames).
+    pub fn find_candidate_by_identity_hash(&self, identity_hash: &[u8; 32], exclude_file: &str) -> Option<&GlobalNodeRef> {
+        if let Some(candidates) = self.by_identity_hash.get(identity_hash) {
+            for candidate in candidates {
+                if candidate.file_path != exclude_file {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -192,6 +235,7 @@ pub fn compute_diff(
 
 /// Compute multi-file semantic diff with unified cross-file MOVE and RENAME detection
 /// using the `GlobalNodeIndex`.
+#[allow(dead_code)]
 pub fn compute_multi_file_diff(
     old_asts: &[(&str, &AstNode)],
     new_asts: &[(&str, &AstNode)],
@@ -212,8 +256,8 @@ pub fn compute_multi_file_diff(
         file_ops.insert((*path).to_string(), ops);
     }
 
-    // Resolve cross-file MOVE / RENAME pairs using GlobalNodeIndex
-    let _global_index = GlobalNodeIndex::build(new_asts);
+    // Resolve cross-file MOVE / RENAME pairs using GlobalNodeIndex O(1) lookups
+    let global_index = GlobalNodeIndex::build(new_asts);
 
     let mut deleted_nodes: Vec<(String, OperationRecord)> = Vec::new();
     let mut inserted_nodes: Vec<(String, OperationRecord)> = Vec::new();
@@ -233,6 +277,37 @@ pub fn compute_multi_file_diff(
     for (old_path, del_op) in &deleted_nodes {
         let del_details = &del_op.details;
         if let Some(old_loc) = &del_op.old_location {
+            let del_name = del_details.split('\'').nth(1).unwrap_or("");
+            let kind_str = del_details.split_whitespace().next().unwrap_or("");
+
+            // Pass 1: O(1) indexed lookup via GlobalNodeIndex
+            if let Some(matched_node) = global_index.find_candidate_for_move(kind_str, del_name, old_path) {
+                let ins_details = format!("{} '{}' inserted", matched_node.kind, matched_node.name);
+                if !resolved_inserts.contains(&ins_details) {
+                    let new_path = &matched_node.file_path;
+                    let sim = del_op.similarity.clone();
+                    let new_loc_str = format!("{}:L{}-L{}", new_path, matched_node.start_row + 1, matched_node.end_row + 1);
+
+                    if let Some(ops) = file_ops.get_mut(old_path) {
+                        ops.retain(|o| &o.details != del_details);
+                        ops.push(OperationRecord {
+                            op_type: OperationType::Move,
+                            entity_type: del_op.entity_type.clone(),
+                            old_location: Some(old_loc.to_string()),
+                            new_location: Some(new_loc_str),
+                            details: format!("Moved to {}:L{}", new_path, matched_node.start_row + 1),
+                            similarity: sim,
+                        });
+                    }
+                    if let Some(ops) = file_ops.get_mut(new_path) {
+                        ops.retain(|o| o.details != ins_details);
+                    }
+                    resolved_inserts.insert(ins_details);
+                    continue;
+                }
+            }
+
+            // Fallback pass: iterate inserted_nodes if del_name is empty/anonymous
             for (new_path, ins_op) in &inserted_nodes {
                 if old_path == new_path || resolved_inserts.contains(&ins_op.details) {
                     continue;
@@ -240,7 +315,6 @@ pub fn compute_multi_file_diff(
 
                 let is_same_entity = del_op.entity_type == ins_op.entity_type;
                 if is_same_entity {
-                    let del_name = del_details.split('\'').nth(1).unwrap_or("");
                     let ins_name = ins_op.details.split('\'').nth(1).unwrap_or("");
 
                     if !del_name.is_empty() && del_name == ins_name {
@@ -250,14 +324,14 @@ pub fn compute_multi_file_diff(
                             ops.push(OperationRecord {
                                 op_type: OperationType::Move,
                                 entity_type: del_op.entity_type.clone(),
-                                old_location: Some(format!("{}", old_loc)),
+                                old_location: Some(old_loc.to_string()),
                                 new_location: ins_op.new_location.as_ref().map(|loc| format!("{}:{}", new_path, loc)),
                                 details: format!("Moved to {}:{}", new_path, ins_op.new_location.as_deref().unwrap_or("")),
                                 similarity: sim,
                             });
                         }
                         if let Some(ops) = file_ops.get_mut(new_path) {
-                            ops.retain(|o| &o.details != &ins_op.details);
+                            ops.retain(|o| o.details != ins_op.details);
                         }
                         resolved_inserts.insert(ins_op.details.clone());
                         break;
@@ -284,9 +358,18 @@ pub fn count_nodes(node: &AstNode) -> u64 {
 //   3. composite similarity_score ≥ threshold →  modify / rename
 //   4. unmatched                            →  insert / delete
 
-fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRecord> {
-    let nodes_a = collect_significant_nodes(ast_a, &[]);
-    let nodes_b = collect_significant_nodes(ast_b, &[]);
+pub fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRecord> {
+    compute_structural_diff_windowed(ast_a, ast_b, 0, None)
+}
+
+pub fn compute_structural_diff_windowed(
+    ast_a: &AstNode,
+    ast_b: &AstNode,
+    file_size_bytes: usize,
+    changed_windows: Option<&[(usize, usize)]>,
+) -> Vec<OperationRecord> {
+    let nodes_a = collect_significant_nodes_windowed(ast_a, &[], file_size_bytes, changed_windows);
+    let nodes_b = collect_significant_nodes_windowed(ast_b, &[], file_size_bytes, changed_windows);
 
     // Build hash-bucket index for B-side nodes (O(n) build, O(1) lookups)
     let index_b = NodeIndex::build(&nodes_b);
@@ -298,26 +381,28 @@ fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRec
 
     // ── Phase 1: exact structural + content hash match ───────────────
     //    Same tree shape AND same leaf tokens → identical (or moved).
-    //    Indexed lookup by structural_hash instead of scanning all B-nodes.
+    //    Indexed lookup by structural_hash with context_hash tie-breaking.
     for (i_a, na) in nodes_a.iter().enumerate() {
         if matched_a.contains(&na.id) {
             continue;
         }
         if let Some(candidates) = index_b.by_structural_hash.get(&na.structural_hash) {
-            for &idx in candidates {
+            let best_idx = candidates.iter().copied().find(|&idx| {
                 let nb = &nodes_b[idx];
-                if matched_b.contains(&nb.id) {
-                    continue;
-                }
-                if na.content_hash == nb.content_hash {
-                    matched_a.insert(na.id);
-                    matched_b.insert(nb.id);
-                    // Path changed → moved
-                    if na.path != nb.path {
-                        matches.push((i_a, idx, MatchType::Moved));
-                    }
-                    // else: truly identical — no operation needed
-                    break;
+                !matched_b.contains(&nb.id) && na.content_hash == nb.content_hash && (na.context_hash == nb.context_hash || na.name == nb.name)
+            }).or_else(|| {
+                candidates.iter().copied().find(|&idx| {
+                    let nb = &nodes_b[idx];
+                    !matched_b.contains(&nb.id) && na.content_hash == nb.content_hash
+                })
+            });
+
+            if let Some(idx) = best_idx {
+                let nb = &nodes_b[idx];
+                matched_a.insert(na.id);
+                matched_b.insert(nb.id);
+                if na.path != nb.path {
+                    matches.push((i_a, idx, MatchType::Moved));
                 }
             }
         }
@@ -325,30 +410,34 @@ fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRec
 
     // ── Phase 2: structure_hash match + token diff ───────────────────
     //    Same tree shape but different content → rename or minor modify.
-    //    Indexed lookup by structural_hash.
+    //    Indexed lookup by structural_hash with context_hash tie-breaking.
     for (i_a, na) in nodes_a.iter().enumerate() {
         if matched_a.contains(&na.id) {
             continue;
         }
         if let Some(candidates) = index_b.by_structural_hash.get(&na.structural_hash) {
-            for &idx in candidates {
+            let best_idx = candidates.iter().copied().find(|&idx| {
                 let nb = &nodes_b[idx];
-                if matched_b.contains(&nb.id) {
-                    continue;
-                }
-                if na.kind == nb.kind {
-                    matched_a.insert(na.id);
-                    matched_b.insert(nb.id);
-                    if na.name == nb.name {
-                        // Same shape, same name, different tokens → modify
-                        matches.push((i_a, idx, MatchType::Modified));
-                    } else if node_identity::only_identifiers_changed(&na.ast_node, &nb.ast_node) {
-                        // Same shape, only identifiers differ → rename
-                        matches.push((i_a, idx, MatchType::Renamed));
-                    } else {
-                        matches.push((i_a, idx, MatchType::Modified));
-                    }
-                    break;
+                !matched_b.contains(&nb.id) && na.kind == nb.kind && (na.context_hash == nb.context_hash || na.name == nb.name)
+            }).or_else(|| {
+                candidates.iter().copied().find(|&idx| {
+                    let nb = &nodes_b[idx];
+                    !matched_b.contains(&nb.id) && na.kind == nb.kind
+                })
+            });
+
+            if let Some(idx) = best_idx {
+                let nb = &nodes_b[idx];
+                matched_a.insert(na.id);
+                matched_b.insert(nb.id);
+                if na.name == nb.name {
+                    // Same shape, same name, different tokens → modify
+                    matches.push((i_a, idx, MatchType::Modified));
+                } else if node_identity::only_identifiers_changed(&na.ast_node, &nb.ast_node) {
+                    // Same shape, only identifiers differ → rename
+                    matches.push((i_a, idx, MatchType::Renamed));
+                } else {
+                    matches.push((i_a, idx, MatchType::Modified));
                 }
             }
         }
@@ -417,25 +506,29 @@ fn compute_structural_diff(ast_a: &AstNode, ast_b: &AstNode) -> Vec<OperationRec
         let mut best: Option<(usize, f64)> = None;
 
         if let Some(candidates) = index_b.by_kind_with_size.get(na.kind.as_str()) {
-            for &(idx, size_b) in candidates {
-                let nb = &nodes_b[idx];
-                if matched_b.contains(&nb.id) {
-                    continue;
-                }
-                // Subtree-size pre-filter: skip if sizes differ by more than 3×
-                let (smaller, larger) = if size_a <= size_b {
-                    (size_a, size_b)
-                } else {
-                    (size_b, size_a)
-                };
-                if larger > 0 && smaller * 3 < larger {
-                    continue;
-                }
-                let sim = node_identity::composite_similarity(&na.ast_node, &nb.ast_node);
-                if sim >= node_identity::MODIFY_THRESHOLD && best.is_none_or(|(_, s)| sim > s) {
-                    best = Some((idx, sim));
-                }
-            }
+            best = candidates
+                .par_iter()
+                .filter_map(|&(idx, size_b)| {
+                    let nb = &nodes_b[idx];
+                    if matched_b.contains(&nb.id) {
+                        return None;
+                    }
+                    let (smaller, larger) = if size_a <= size_b {
+                        (size_a, size_b)
+                    } else {
+                        (size_b, size_a)
+                    };
+                    if larger > 0 && smaller * 3 < larger {
+                        return None;
+                    }
+                    let sim = node_identity::composite_similarity(&na.ast_node, &nb.ast_node);
+                    if sim >= node_identity::MODIFY_THRESHOLD {
+                        Some((idx, sim))
+                    } else {
+                        None
+                    }
+                })
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         }
 
         if let Some((idx, _)) = best {
@@ -527,8 +620,7 @@ pub const OVERSIZED_FILE_THRESHOLD_BYTES: usize = 1_048_576;
 
 /// Collect significant AST nodes, optionally filtering by changed line window ranges
 /// if the file size exceeds `OVERSIZED_FILE_THRESHOLD_BYTES`.
-#[allow(dead_code)]
-fn collect_significant_nodes_windowed(
+pub fn collect_significant_nodes_windowed(
     node: &AstNode,
     parent_path: &[String],
     file_size_bytes: usize,

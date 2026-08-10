@@ -124,7 +124,7 @@ export interface DiffOutput {
   performance: PerformanceMetrics;
 }
 
-// Helper Accessors to handle both camelCase (CLI v0.4.0) and snake_case properties
+// Helper Accessors to handle both camelCase (CLI v0.4.5) and snake_case properties
 export function getFilePath(file: FileDiff): string {
   return file.filePath || file.file_path || "";
 }

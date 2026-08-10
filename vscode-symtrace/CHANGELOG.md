@@ -2,6 +2,12 @@
 
 All notable changes to the "symtrace-vscode" extension will be documented in this file.
 
+## [0.4.5] - 2026-08-10
+
+### Fixed & Enhanced
+- Aligned extension binary downloader with `v0.4.5` GitHub release artifacts (`JashT14/symtrace`).
+- Full schema support for camelCase `v0.4.5` output streams including multiset frequency similarity and line windowing.
+
 ## [0.4.0] - 2026-08-08
 
 ### Added
