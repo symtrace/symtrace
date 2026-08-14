@@ -202,6 +202,9 @@ Install the **Symtrace for VS Code** extension from the VS Code Marketplace. It 
 - [BENCHMARKS.md](BENCHMARKS.md) - Performance benchmark reports.
 - [CHANGELOG.md](CHANGELOG.md) - Version release history & changelog.
 
+- [BENCHMARKING_PROTOCOL.md](BENCHMARKING_PROTOCOL.md) - Research benchmarking protocol & plan.
+- [BENCHMARKS_RESULTS.md](BENCHMARKS_RESULTS.md) - Research benchmarking results.
+
 ## License
 
 [MIT License](LICENSE) © 2026 Jash Thakkar.

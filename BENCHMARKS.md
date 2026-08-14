@@ -33,3 +33,5 @@
 - [TECHNICAL_SPECIFICATIONS.md](TECHNICAL_SPECIFICATIONS.md) - Comprehensive technical specifications.
 - [SECURITY.md](SECURITY.md) - Security policy and audit findings.
 - [CHANGELOG.md](CHANGELOG.md) - Version release history & changelog.
+- [BENCHMARKING_PROTOCOL.md](BENCHMARKING_PROTOCOL.md) - Research benchmarking protocol & plan.
+- [BENCHMARKS_RESULTS.md](BENCHMARKS_RESULTS.md) - Research benchmarking results.
