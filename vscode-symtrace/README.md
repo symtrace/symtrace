@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/symtrace/symtrace/main/vscode-symtrace/media/symtrace-banner.jpg" alt="symtrace banner" width="700">
+  <img src="media/symtrace-banner.jpg" alt="symtrace banner" width="700">
 </p>
 
 # symtrace for VS Code (v0.5.0)
