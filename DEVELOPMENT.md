@@ -1,6 +1,6 @@
-# Development Guide — Symtrace v0.4.5
+# Development Guide — Symtrace v0.5.0
 
-This document describes the production-ready build, quality verification, and release development workflow for `symtrace` v0.4.5.
+This document describes the production-ready build, quality verification, and release development workflow for `symtrace` v0.5.0.
 
 ## Build System
 
@@ -104,12 +104,12 @@ Result: Fast, small, production-grade binary with minimal runtime overhead.
 
 ## Code Quality & Testing Suite Architecture
 
-`symtrace` v0.4.5 enforces a strict four-tier verification architecture:
+`symtrace` v0.5.0 enforces a strict four-tier verification architecture:
 
 ```
-1. Unit Tests (177 passing)       ──► Validate parser, diff engine, limits, config, and pagers
-2. Property Tests (proptest)      ──► Assert diff symmetry, determinism, and structural invariants
-3. Differential Tests (9 passing) ──► Assert zero false positives vs git diff baseline
+1. Unit Tests (276 passing)       ──► Validate parser, diff engine, limits, config, and pagers
+2. Property Tests (20 passing)    ──► Assert diff symmetry, determinism, and structural invariants
+3. Differential Tests (36 passing)──► Assert zero false positives vs git diff baseline
 4. Fuzzing (cargo-fuzz)            ──► Validate parser resource limits under adversarial inputs
 ```
 
@@ -118,67 +118,31 @@ Result: Fast, small, production-grade binary with minimal runtime overhead.
 Run before committing:
 
 ```bash
-./build.sh production   # Linux/macOS
-.\build.ps1 -Target production # Windows
-```
-
-### 2. Code Formatting
-
-All code **must** be formatted with `rustfmt`:
-
-```bash
-cargo fmt --all -- --check
-```
-
-### 3. Strict Linting (`clippy`)
-
-All clippy warnings are treated as errors (`unsafe_code = "deny"` enforced):
-
-```bash
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
-### 4. Comprehensive Testing
-
-Run the complete 166-test suite:
-
-```bash
+cargo fmt --check
+cargo clippy -- -D warnings
 cargo test --all
 ```
 
-#### Property-Based Testing (`proptest`)
-
-Runs randomized property tests verifying AST node structural hash invariance, diff symmetry, and determinism:
+### 2. Running the Full Test Suite
 
 ```bash
-cargo test --test proptests
-```
+# Run unit tests
+cargo test --bin symtrace
 
-#### Differential Testing
-
-Validates formatting-only and cross-file symbol migration scenarios across Rust, JavaScript, Python, C, and Go:
-
-```bash
+# Run differential multi-language integration tests
 cargo test --test differential_tests
+
+# Run proptest randomized invariant test suite
+cargo test --test proptests
+
+# Run all test suites
+cargo test --all
 ```
 
-#### Fuzzing Targets (`cargo-fuzz`)
-
-Fuzz parsing limits under arbitrary byte inputs:
-
-```bash
-cargo fuzz run parse_limits
-```
+---
 
 ## Dependency Management
 
-| Crate | Version | Purpose |
-| ------- | --------- | --------- |
-| `clap` | `=4.5.60` | CLI argument parsing |
-| `git2` | `=0.19.0` | libgit2 bindings for Git repository access |
-| `tree-sitter` | `=0.25.10` | Parser framework |
-| `tree-sitter-rust` | `=0.24.0` | Rust language grammar |
-| `tree-sitter-javascript` | `=0.25.0` | JavaScript language grammar |
 | `tree-sitter-typescript` | `=0.23.2` | TypeScript language grammar |
 | `tree-sitter-python` | `=0.25.0` | Python language grammar |
 | `tree-sitter-java` | `=0.23.5` | Java language grammar |
@@ -204,7 +168,7 @@ All versions are exactly pinned (`=x.y.z`) in `Cargo.toml`. `Cargo.lock` is comm
 
 ```bash
 # 1. Clone
-git clone https://github.com/JashT14/symtrace.git
+git clone https://github.com/symtrace/symtrace.git
 cd symtrace
 
 # 2. Install Rust (if needed)

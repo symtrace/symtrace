@@ -118,9 +118,17 @@ pub struct Args {
     #[arg(long)]
     pub name_only: bool,
 
-    /// Specify output format: ansi, json, jsonl, markdown, html, sarif
+    /// Specify output format: ansi, json, jsonl, markdown, html, sarif, prompt
     #[arg(long, default_value = "ansi")]
     pub format: String,
+
+    /// Force micro-compact inline token diff output for small/single-line edits
+    #[arg(long)]
+    pub compact: bool,
+
+    /// Force full structural banners, headers, and diagnostics output
+    #[arg(long, alias = "verbose")]
+    pub full_headers: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -165,5 +173,22 @@ pub enum Commands {
         theirs_file: String,
         /// Display file path (%P)
         display_path: String,
+    },
+
+    /// Declarative AST semantic linter mode (enforces custom .scm rules and CI thresholds)
+    #[command(name = "lint")]
+    Lint {
+        /// Target path or directory to lint (default: current directory ".")
+        #[arg(default_value = ".")]
+        path: String,
+        /// Custom queries directory containing .scm rules (default: .symtrace/queries)
+        #[arg(long)]
+        queries_dir: Option<String>,
+        /// Maximum allowed warnings before non-zero CI exit code (default: 0)
+        #[arg(long, default_value_t = 0)]
+        max_warnings: usize,
+        /// Output format: cli, json, sarif (default: cli)
+        #[arg(long, default_value = "cli")]
+        format: String,
     },
 }

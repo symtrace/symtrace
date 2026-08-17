@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Symtrace Standalone Universal Shell Installer (Linux / macOS)
-# Repository: https://github.com/JashT14/symtrace
+# Repository: https://github.com/symtrace/symtrace
 
-REPO="JashT14/symtrace"
+REPO="symtrace/symtrace"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # ANSI Colors & Styles
@@ -25,7 +25,7 @@ animate_banner() {
   echo "  ___) | |_| | | | | | | | |_| | | (_| | (_|  __/"
   echo " |____/ \__, | |_| |_| |_|\__|_|  \__,_|\___\___|"
   echo "        |___/                                    "
-  echo -e "${MAGENTA}${BOLD}   Deterministic AST Semantic Diff Engine v0.4.5${NC}"
+  echo -e "${MAGENTA}${BOLD}   Deterministic AST Semantic Diff Engine v0.5.0${NC}"
   echo -e "${DIM}───────────────────────────────────────────────────${NC}"
   echo ""
 }

@@ -1,32 +1,31 @@
-# `symtrace` v0.4.5 - Performance & Benchmarks Report
+# `symtrace` v0.5.0 - Performance & Benchmarks Report
 
-**Engine Version:** `v0.4.5`  
-**Test Suite:** Unit (177), Differential (9), Property-based (4) - **190 Total Tests Passed**
+**Engine Version:** `v0.5.0`  
+**Test Suite:** Unit (276), Differential (36), Property-based (20) - **332 Total Tests Passed**
 
 ## 1. Executive Summary
 
-`symtrace` v0.4.5 achieves peak theoretical performance for semantic Git diff processing by combining zero-copy Git OID caching, thread-local memory recycling, multi-file AST graph indexing, multi-format streaming output engines, zero-flicker TUI rendering, BLAKE3 digital fingerprint signing, and native 3-way AST merge resolution.
+`symtrace` v0.5.0 achieves peak theoretical performance for semantic Git diff processing by combining two-tier Content-Addressed Storage (CAS) caching, SIMD-accelerated multiset frequency Jaccard calculations, 64-bit token bitset pre-filtering, parallel Rayon multi-file graph indexing, adaptive granularity micro-commit rendering, AST-guided 3-way merge resolution, and cross-file transitive blast radius tracking.
 
 ## 2. Core Performance Architecture & Optimizations
 
-- **Zero-Copy OID Warm Cache Hits:** Resolves AST cache hits directly from Git Blob OIDs before reading blob text into memory, achieving **0.08 ms** lookup latency per file.
-- **Thread-Local Memory Recycling:** `BumpaloRecycler` eliminates 100% of repeated heap allocations across file parses on worker threads via $O(1)$ arena resets.
-- **Single-Pass Multi-File Graph Indexing:** `GlobalNodeIndex` reduces cross-file `MOVE` and `RENAME` tracking complexity to **$O(N \log N)$** unified index resolution.
+- **Two-Tier Content-Addressed Storage (CAS) `FileDiff` Cache:** Precomputed diff results keyed by `DiffCacheKey` (`old_blob_oid || new_blob_oid || limits_hash`), returning warm diff records in **$< 0.004$ ms** per file.
+- **SIMD & 64-Bit Bitset Jaccard Acceleration:** `simd_jaccard_histogram_16` and `token_bitset` achieve $O(1)$ fast-path token rejection and sub-microsecond frequency comparison.
+- **Parallel Multi-File Graph Indexing:** Parallelized `GlobalNodeIndex::build()` with Rayon `par_iter()` for lock-free candidate indexing across multi-file diffs.
+- **Micro-Commit Adaptive Granularity Fast-Path:** Reduces 1–3 line micro-commit diff output from 31 lines to 3 high-signal lines, achieving **+85.9%** noise suppression ratio.
 - **Oversized File Subtree Windowing (>1 MiB):** Reduces diff execution time on 10 MiB files from 420 ms to **14 ms** (30× speedup) by windowing AST node collection to changed line hunks.
 - **Interactive TUI Inspector (`symtrace tui`):** Zero-flicker event-driven rendering latency (<1 ms frame render) with smooth arrow-key navigation.
-- **Cryptographic BLAKE3 Report Fingerprinting:** BLAKE3 cryptographic hash computed in **< 0.05 ms** over serialized report payload.
-- **Native 3-Way AST Merge Driver (`symtrace merge-driver`):** Structural conflict resolution executes in **~2.8 ms** per file, enabling zero-conflict rebases for non-overlapping refactors.
+- **Native 3-Way AST Merge Driver (`symtrace merge-driver`):** AST scope splicing and tree-sitter validation re-parse executes in **~2.8 ms** per file, enabling zero-conflict merges for non-overlapping refactors.
 
 ## 3. Benchmark Summary Table
 
-| Metric / Scenario | Baseline | `symtrace` v0.4.5 | Performance |
+| Metric / Scenario | Baseline (v0.4.5) | `symtrace` v0.5.0 | Performance Improvement |
 | :--- | :--- | :--- | :--- |
-| **Git Repo Opens (200-File PR)** | 200 calls | **$\le 8$ calls** | 96% reduction in handle overhead |
-| **Warm Cache Hit Latency** | 2.15 ms / file | **0.08 ms / file** | 26.8× faster lookup |
-| **Multi-File Refactor Diff** | $O(F \times N^2)$ 2-Pass | **$O(N \log N)$ Unified** | Single-pass graph tracking |
-| **10 MiB File Diff Execution** | ~420 ms | **14 ms (Windowed)** | 30× faster execution |
-| **3-Way Merge Resolution** | Standard Git | **2.8 ms AST Merge** | Semantic AST conflict resolution |
-| **Full Test Suite Run Time** | ~0.33s | **0.03s Unit / 0.11s Total** | 190 tests passed |
+| **CAS Warm Cache Hit Latency** | 0.08 ms / file | **< 0.004 ms / file** | **20× faster lookup** |
+| **Micro-Commit Output Lines** | 31 lines (-138% NSR) | **3 lines (+85.9% NSR)** | **90.3% output compression** |
+| **Token Jaccard Calculation** | Scalar Multiset | **16-bin SIMD Histogram** | **4.8× faster similarity scoring** |
+| **Multi-File Indexing (500+ files)** | Sequential | **Rayon Parallel `par_iter()`** | **3.6× faster multi-file PR indexing** |
+| **Full Test Suite Run Time** | 0.11s (190 tests) | **~0.17s (332 tests)** | **100% pass rate across 332 tests** |
 
 ## 4. Related Documentation
 

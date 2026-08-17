@@ -1,7 +1,170 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 
+pub use crate::types::DisplayGranularity;
 use crate::types::{DiffOutput, OperationType};
+
+/// Determine the display granularity dynamically based on commit size, change surface, and flags.
+pub fn determine_granularity(
+    output: &DiffOutput,
+    compact_flag: bool,
+    full_headers_flag: bool,
+) -> DisplayGranularity {
+    if compact_flag {
+        return DisplayGranularity::MicroCompact;
+    }
+    if full_headers_flag {
+        return DisplayGranularity::FullStructural;
+    }
+
+    // Auto-detection:
+    let total_ops: usize = output.files.iter().map(|f| f.operations.len()).sum();
+    let changed_files = output.files.iter().filter(|f| !f.operations.is_empty()).count();
+
+    // Check for multi-file events or refactor patterns
+    let has_cross_file = output
+        .cross_file_tracking
+        .as_ref()
+        .map_or(false, |c| !c.cross_file_events.is_empty());
+    let has_refactors = output.files.iter().any(|f| !f.refactor_patterns.is_empty());
+
+    // Check if any operation is an API surface change or multi-line move (requires full visibility)
+    let has_api_or_move = output.files.iter().flat_map(|f| &f.operations).any(|op| {
+        op.op_type == OperationType::Move || op.details.to_lowercase().contains("api surface")
+    });
+
+    if has_cross_file || has_refactors || has_api_or_move || changed_files > 2 || total_ops > 3 {
+        DisplayGranularity::Standard
+    } else {
+        DisplayGranularity::MicroCompact
+    }
+}
+
+/// Format DiffOutput in ultra-compact inline micro-commit format.
+/// Emits 1–3 compact lines with colorized operation badges and inline token changes,
+/// suppressing large decorative banners, timing diagnostics, and summary tables.
+pub fn format_micro_cli(output: &DiffOutput) -> String {
+    let mut buf = String::new();
+    let mut any_ops = false;
+
+    for file in &output.files {
+        for op in &file.operations {
+            any_ops = true;
+            let (symbol, badge) = match op.op_type {
+                OperationType::Move => ("↔".blue().bold(), "[MOVE]".blue().bold()),
+                OperationType::Rename => ("✎".yellow().bold(), "[RENAME]".yellow().bold()),
+                OperationType::Insert => ("+".green().bold(), "[INSERT]".green().bold()),
+                OperationType::Delete => ("-".red().bold(), "[DELETE]".red().bold()),
+                OperationType::Modify => ("~".cyan().bold(), "[MODIFY]".cyan().bold()),
+            };
+
+            let loc = op.new_location.as_deref().or(op.old_location.as_deref()).unwrap_or("L1");
+            let sim_str = if let Some(ref sim) = op.similarity {
+                format!(" ({:.0}%)", sim.similarity_percent).dimmed().to_string()
+            } else {
+                String::new()
+            };
+
+            buf.push_str(&format!(
+                "{} {}:{}  {}  {}{}\n",
+                symbol,
+                file.file_path.bold(),
+                loc,
+                badge,
+                op.details,
+                sim_str
+            ));
+        }
+    }
+
+    if !any_ops {
+        buf.push_str(&"  (no semantic changes detected)\n".dimmed().to_string());
+    }
+
+    buf
+}
+
+/// Format DiffOutput with explicit granularity selection.
+pub fn format_cli_with_granularity(output: &DiffOutput, granularity: DisplayGranularity) -> String {
+    match granularity {
+        DisplayGranularity::MicroCompact => format_micro_cli(output),
+        DisplayGranularity::Standard => {
+            let mut buf = String::new();
+            buf.push_str(&format!("{}\n", "━━━ symtrace Semantic Diff ━━━".bold()));
+            buf.push_str(&format!(
+                "Repository: {} | Comparing: {} → {}\n\n",
+                output.repository.cyan(),
+                output.commit_a.yellow(),
+                output.commit_b.yellow()
+            ));
+
+            if output.files.is_empty() {
+                buf.push_str(&"  (no semantic changes detected)\n\n".dimmed().to_string());
+            }
+
+            for file in &output.files {
+                buf.push_str(&format!("{} {}\n", "━━━".bold(), file.file_path.bold().underline()));
+                if file.operations.is_empty() {
+                    buf.push_str(&"    (no significant operations)\n".dimmed().to_string());
+                }
+                for op in &file.operations {
+                    let (symbol, colored_type) = match op.op_type {
+                        OperationType::Move => ("↔", "MOVE".blue().bold()),
+                        OperationType::Rename => ("✎", "RENAME".yellow().bold()),
+                        OperationType::Insert => ("+", "INSERT".green().bold()),
+                        OperationType::Delete => ("-", "DELETE".red().bold()),
+                        OperationType::Modify => ("~", "MODIFY".cyan().bold()),
+                    };
+                    let location = match (&op.old_location, &op.new_location) {
+                        (Some(old), Some(new)) => if old == new { old.clone() } else { format!("{} → {}", old, new) },
+                        (Some(old), None) => old.clone(),
+                        (None, Some(new)) => new.clone(),
+                        (None, None) => "—".to_string(),
+                    };
+                    buf.push_str(&format!("  {} [{}] {} ({})", symbol, colored_type, op.details, location.dimmed()));
+                    if let Some(ref sim) = op.similarity {
+                        buf.push_str(&format!(" [{:.0}% similarity, {}]", sim.similarity_percent, sim.change_intensity));
+                    }
+                    buf.push('\n');
+                }
+                if !file.refactor_patterns.is_empty() {
+                    buf.push_str(&format!("  {}\n", "── Refactor Patterns ──".dimmed()));
+                    for pattern in &file.refactor_patterns {
+                        buf.push_str(&format!("    {} {} (confidence: {:.0}%)\n", "▸".magenta(), pattern.description, pattern.confidence * 100.0));
+                    }
+                }
+                buf.push('\n');
+            }
+
+            // Summary
+            buf.push_str(&format!("{}\n", "━━━ Summary ━━━".bold()));
+            buf.push_str(&format!(
+                "  Files: {} | Moves: {} | Renames: {} | Inserts: {} | Deletes: {} | Modifies: {}\n",
+                output.summary.total_files, output.summary.moves, output.summary.renames, output.summary.inserts, output.summary.deletes, output.summary.modifications
+            ));
+
+            if let Some(ref tracking) = output.cross_file_tracking {
+                if !tracking.cross_file_events.is_empty() {
+                    buf.push_str(&format!("\n{}\n", "━━━ Cross-File Symbol Tracking ━━━".bold()));
+                    for event in &tracking.cross_file_events {
+                        let symbol = match event.event {
+                            crate::types::CrossFileEventKind::CrossFileMove => "↔".blue().to_string(),
+                            crate::types::CrossFileEventKind::CrossFileRename => "✎".yellow().to_string(),
+                            crate::types::CrossFileEventKind::ApiSurfaceChange => "⚠".red().to_string(),
+                        };
+                        buf.push_str(&format!("  {} [{}] {} (similarity: {:.0}%)\n", symbol, event.event.to_string().bold(), event.description, event.similarity_score * 100.0));
+                    }
+                }
+            }
+
+            if let Some(ref classification) = output.commit_classification {
+                buf.push_str(&format!("\nCommit Class: {} (confidence: {:.0}%)\n", classification.primary_class.to_string().bold().cyan(), classification.confidence_score * 100.0));
+            }
+            buf
+        }
+        DisplayGranularity::FullStructural => format_cli(output),
+    }
+}
 
 /// Available output formats supported by `symtrace`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +175,7 @@ pub enum OutputFormat {
     Markdown,
     Html,
     Sarif,
+    Prompt,
 }
 
 impl OutputFormat {
@@ -23,8 +187,9 @@ impl OutputFormat {
             "markdown" | "md" => Ok(Self::Markdown),
             "html" => Ok(Self::Html),
             "sarif" => Ok(Self::Sarif),
+            "prompt" | "llm" => Ok(Self::Prompt),
             _ => anyhow::bail!(
-                "Unsupported output format: '{}'. Choose from ansi, json, jsonl, markdown, html, sarif",
+                "Unsupported output format: '{}'. Choose from ansi, json, jsonl, markdown, html, sarif, prompt",
                 s
             ),
         }
@@ -62,7 +227,7 @@ pub fn format_jsonl(output: &DiffOutput) -> Result<String> {
 /// Format high-level summary table (--stat / -s).
 pub fn format_stat(output: &DiffOutput) -> String {
     let mut buf = String::new();
-    buf.push_str("━━━ SymTrace Diff Stat ━━━\n");
+    buf.push_str("━━━ symtrace Diff Stat ━━━\n");
     buf.push_str(&format!("{:<50} | {:<12} | {:<10}\n", "File Path", "Operations", "Status"));
     buf.push_str(&format!("{:-<50}-+-{:-<12}-+-{:-<10}\n", "", "", ""));
 
@@ -99,10 +264,117 @@ pub fn format_name_only(output: &DiffOutput) -> String {
         .join("\n")
 }
 
+/// Format DiffOutput as an ultra-dense, token-optimized context prompt for LLMs (Gemini, Claude, GPT).
+/// Emits semantic structural changes, parameter deltas, control-flow shifts, and blast radius impact
+/// while saving up to 80% tokens compared to raw unified diffs.
+pub fn format_prompt(output: &DiffOutput) -> String {
+    let mut buf = String::new();
+    buf.push_str("=== symtrace SEMANTIC CONTEXT ===\n");
+    buf.push_str(&format!(
+        "Repository: {} | Commits: {} -> {}\n",
+        output.repository, output.commit_a, output.commit_b
+    ));
+
+    if let Some(ref class) = output.commit_classification {
+        let intents = if class.intent_labels.is_empty() {
+            String::new()
+        } else {
+            format!(" | Intents: [{}]", class.intent_labels.join(", "))
+        };
+        buf.push_str(&format!(
+            "Classification: {} (confidence: {:.0}%){}\n",
+            class.primary_class, class.confidence_score * 100.0, intents
+        ));
+    }
+
+    buf.push_str(&format!(
+        "Summary: {} files (+{} -{} ~{} ↔{} ✎{})\n\n",
+        output.summary.total_files,
+        output.summary.inserts,
+        output.summary.deletes,
+        output.summary.modifications,
+        output.summary.moves,
+        output.summary.renames,
+    ));
+
+    // Contract violations if present
+    if let Some(ref violations) = output.contract_violations {
+        if !violations.is_empty() {
+            buf.push_str("--- CRITICAL CONTRACT & SAFETY ALERTS ---\n");
+            for v in violations {
+                buf.push_str(&format!(
+                    "! [{}] {}:L{} — {}\n",
+                    v.rule, v.file_path, v.line, v.message
+                ));
+            }
+            buf.push('\n');
+        }
+    }
+
+    // Semantic changes per file
+    buf.push_str("--- STRUCTURAL MODIFICATIONS ---\n");
+    let mut any_ops = false;
+    for file in &output.files {
+        if file.operations.is_empty() {
+            continue;
+        }
+        for op in &file.operations {
+            any_ops = true;
+            let tag = match op.op_type {
+                OperationType::Move => "[MOVED]",
+                OperationType::Rename => "[RENAMED]",
+                OperationType::Insert => "[INSERTED]",
+                OperationType::Delete => "[DELETED]",
+                OperationType::Modify => "[MODIFIED]",
+            };
+            let loc = op.new_location.as_deref().or(op.old_location.as_deref()).unwrap_or("L1");
+            buf.push_str(&format!(
+                "{} {} ({} at {})\n",
+                tag, op.details, file.file_path, loc
+            ));
+            if let Some(ref sim) = op.similarity {
+                if sim.control_flow_changed {
+                    buf.push_str("  ~ Control flow altered\n");
+                }
+            }
+        }
+        for pat in &file.refactor_patterns {
+            buf.push_str(&format!("  * Refactor: {} (confidence: {:.0}%)\n", pat.description, pat.confidence * 100.0));
+        }
+    }
+
+    if !any_ops {
+        buf.push_str("(no semantic operations detected)\n");
+    }
+
+    // Downstream blast radius
+    if let Some(ref blast_reports) = output.blast_radius {
+        if blast_reports.iter().any(|r| r.total_impacted_callers > 0) {
+            buf.push_str("\n--- SEMANTIC BLAST RADIUS & CALL SITES ---\n");
+            for r in blast_reports {
+                if r.total_impacted_callers > 0 {
+                    buf.push_str(&format!(
+                        "! Symbol '{}' in {} impacts {} caller(s) (Severity: {})\n",
+                        r.modified_symbol, r.file_path, r.total_impacted_callers, r.severity
+                    ));
+                    for c in &r.impacted_callers {
+                        buf.push_str(&format!(
+                            "  ▸ called by '{}' ({}:L{}, depth: {})\n",
+                            c.caller_symbol, c.caller_file, c.call_site_line, c.depth
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    buf
+}
+
 /// Format DiffOutput as Markdown.
 pub fn format_markdown(output: &DiffOutput) -> String {
     let mut buf = String::new();
-    buf.push_str("# SymTrace Semantic Diff Report\n\n");
+    buf.push_str("# symtrace Semantic Diff Report\n\n");
     buf.push_str(&format!("**Repository:** `{}`  \n", output.repository));
     buf.push_str(&format!("**Comparing:** `{}` → `{}`  \n\n", output.commit_a, output.commit_b));
 
@@ -145,43 +417,92 @@ pub fn format_html(output: &DiffOutput) -> String {
     let mut buf = String::new();
     buf.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
     buf.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-    buf.push_str("<title>SymTrace Signed Audit Report</title>\n");
+    buf.push_str("<title>symtrace Audit Report</title>\n");
     buf.push_str("<style>\n");
-    buf.push_str("  :root { --bg: #ffffff; --card: #f8fafc; --border: #cbd5e1; --text: #0f172a; --muted: #475569; --tag-bg: #f1f5f9; --btn-bg: #0f172a; --btn-text: #ffffff; }\n");
-    buf.push_str("  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 32px; line-height: 1.6; }\n");
+    buf.push_str("  :root {\n");
+    buf.push_str("    --bg: #ffffff; --surface: #ffffff; --border: #e5e7eb; --border-dark: #111827;\n");
+    buf.push_str("    --text-main: #111827; --text-muted: #6b7280; --text-light: #9ca3af;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  * { box-sizing: border-box; }\n");
+    buf.push_str("  body {\n");
+    buf.push_str("    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;\n");
+    buf.push_str("    background: var(--bg); color: var(--text-main); margin: 0; padding: 40px 24px;\n");
+    buf.push_str("    line-height: 1.5; -webkit-font-smoothing: antialiased;\n");
+    buf.push_str("  }\n");
     buf.push_str("  .report-container { max-width: 1100px; margin: 0 auto; }\n");
-    buf.push_str("  .header { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }\n");
-    buf.push_str("  .title-area h1 { font-size: 1.6rem; margin: 0 0 6px 0; color: #0f172a; font-weight: 700; letter-spacing: -0.5px; }\n");
-    buf.push_str("  .title-area p { margin: 0; color: var(--muted); font-size: 0.9rem; }\n");
-    buf.push_str("  .meta-group { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }\n");
-    buf.push_str("  .meta-tag { background: #ffffff; border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; color: var(--text); }\n");
-    buf.push_str("  .print-btn { background: var(--btn-bg); color: var(--btn-text); border: none; border-radius: 6px; padding: 8px 16px; font-size: 0.85rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); transition: opacity 0.2s; }\n");
-    buf.push_str("  .print-btn:hover { opacity: 0.9; }\n");
-    buf.push_str("  .disclaimer-card { background: #fffbe6; border: 1px solid #ffe58f; color: #873800; border-radius: 6px; padding: 14px 18px; margin-bottom: 24px; font-size: 0.85rem; line-height: 1.5; }\n");
-    buf.push_str("  .signature-card { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; border-radius: 6px; padding: 14px 18px; margin-bottom: 24px; font-size: 0.85rem; font-family: ui-monospace, monospace; word-break: break-all; }\n");
-    buf.push_str("  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 24px; }\n");
-    buf.push_str("  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 16px; text-align: center; }\n");
-    buf.push_str("  .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }\n");
-    buf.push_str("  .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; color: #0f172a; font-family: ui-monospace, monospace; }\n");
-    buf.push_str("  .audit-meta-card { background: #f1f5f9; border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 24px; font-size: 0.85rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-family: ui-monospace, monospace; }\n");
-    buf.push_str("  .search-input { width: 100%; box-sizing: border-box; background: #ffffff; border: 1px solid var(--border); color: #0f172a; padding: 12px 16px; border-radius: 6px; font-size: 0.95rem; margin-bottom: 24px; outline: none; transition: border-color 0.2s; }\n");
-    buf.push_str("  .search-input:focus { border-color: #0f172a; }\n");
-    buf.push_str("  .file-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; overflow: hidden; page-break-inside: avoid; }\n");
-    buf.push_str("  .file-header { background: #e2e8f0; padding: 14px 20px; font-family: ui-monospace, monospace; font-weight: 600; border-bottom: 1px solid var(--border); color: #0f172a; font-size: 0.95rem; display: flex; justify-content: space-between; align-items: center; }\n");
-    buf.push_str("  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; background: #ffffff; }\n");
-    buf.push_str("  th, td { padding: 12px 20px; text-align: left; border-bottom: 1px solid var(--border); }\n");
-    buf.push_str("  th { background: #f1f5f9; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.5px; }\n");
+    buf.push_str("  .header {\n");
+    buf.push_str("    border: 1px solid var(--border); border-radius: 6px; padding: 24px 28px;\n");
+    buf.push_str("    margin-bottom: 20px; display: flex; justify-content: space-between;\n");
+    buf.push_str("    align-items: flex-start; flex-wrap: wrap; gap: 16px;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  .title-area h1 { font-size: 1.5rem; margin: 0 0 4px 0; color: var(--text-main); font-weight: 700; letter-spacing: -0.02em; }\n");
+    buf.push_str("  .title-area p { margin: 0; color: var(--text-muted); font-size: 0.875rem; }\n");
+    buf.push_str("  .meta-group { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.825rem; }\n");
+    buf.push_str("  .meta-tag { border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; color: var(--text-main); }\n");
+    buf.push_str("  .print-btn {\n");
+    buf.push_str("    background: #111827; color: #ffffff; border: 1px solid #111827;\n");
+    buf.push_str("    border-radius: 4px; padding: 6px 14px; font-size: 0.825rem;\n");
+    buf.push_str("    font-weight: 600; cursor: pointer; transition: background 0.15s ease;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  .print-btn:hover { background: #374151; }\n");
+    buf.push_str("  .notice-card {\n");
+    buf.push_str("    border: 1px solid var(--border); border-radius: 6px;\n");
+    buf.push_str("    padding: 16px 20px; margin-bottom: 20px; font-size: 0.85rem;\n");
+    buf.push_str("    line-height: 1.6; color: var(--text-main);\n");
+    buf.push_str("  }\n");
+    buf.push_str("  .notice-card strong { font-weight: 600; }\n");
+    buf.push_str("  .notice-card code { font-family: ui-monospace, monospace; font-size: 0.8rem; background: #f3f4f6; padding: 2px 5px; border-radius: 3px; word-break: break-all; }\n");
+    buf.push_str("  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }\n");
+    buf.push_str("  .stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 14px; text-align: center; }\n");
+    buf.push_str("  .stat-label { font-size: 0.725rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; }\n");
+    buf.push_str("  .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 2px; color: var(--text-main); font-family: ui-monospace, monospace; }\n");
+    buf.push_str("  .audit-meta-card {\n");
+    buf.push_str("    border: 1px solid var(--border); border-radius: 6px;\n");
+    buf.push_str("    padding: 14px 20px; margin-bottom: 20px; font-size: 0.825rem;\n");
+    buf.push_str("    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n");
+    buf.push_str("    gap: 10px; font-family: ui-monospace, monospace;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  .search-input {\n");
+    buf.push_str("    width: 100%; box-sizing: border-box; background: #ffffff;\n");
+    buf.push_str("    border: 1px solid var(--border); color: var(--text-main);\n");
+    buf.push_str("    padding: 10px 14px; border-radius: 6px; font-size: 0.875rem;\n");
+    buf.push_str("    margin-bottom: 20px; outline: none; transition: border-color 0.15s ease;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  .search-input:focus { border-color: var(--border-dark); }\n");
+    buf.push_str("  .file-card { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 16px; overflow: hidden; page-break-inside: avoid; }\n");
+    buf.push_str("  .file-header {\n");
+    buf.push_str("    background: #f9fafb; padding: 12px 18px;\n");
+    buf.push_str("    font-family: ui-monospace, monospace; font-weight: 600;\n");
+    buf.push_str("    border-bottom: 1px solid var(--border); color: var(--text-main);\n");
+    buf.push_str("    font-size: 0.875rem; display: flex; justify-content: space-between; align-items: center;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; background: #ffffff; }\n");
+    buf.push_str("  th, td { padding: 10px 18px; text-align: left; border-bottom: 1px solid var(--border); }\n");
+    buf.push_str("  th { background: #f9fafb; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; }\n");
     buf.push_str("  tr:last-child td { border-bottom: none; }\n");
-    buf.push_str("  .op-tag { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; font-family: ui-monospace, monospace; background: var(--tag-bg); color: #0f172a; border: 1px solid var(--border); }\n");
-    buf.push_str("  .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }\n");
-    buf.push_str("  @media print { body { background: #ffffff; color: #000000; padding: 0; } .report-container { max-width: 100%; } .print-btn, .search-input { display: none !important; } .file-card { border: 1px solid #cbd5e1; page-break-inside: avoid; } }\n");
+    buf.push_str("  .op-tag {\n");
+    buf.push_str("    display: inline-block; padding: 2px 7px;\n");
+    buf.push_str("    border-radius: 3px; font-size: 0.725rem;\n");
+    buf.push_str("    font-weight: 600; font-family: ui-monospace, monospace;\n");
+    buf.push_str("    border: 1px solid #111827; background: #ffffff; color: #111827;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  .footer {\n");
+    buf.push_str("    text-align: center; margin-top: 36px; padding-top: 20px;\n");
+    buf.push_str("    border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.8rem;\n");
+    buf.push_str("  }\n");
+    buf.push_str("  @media print {\n");
+    buf.push_str("    body { background: #ffffff; color: #000000; padding: 0; }\n");
+    buf.push_str("    .report-container { max-width: 100%; }\n");
+    buf.push_str("    .print-btn, .search-input { display: none !important; }\n");
+    buf.push_str("    .file-card, .header, .stat-card, .notice-card { border: 1px solid #000000; page-break-inside: avoid; }\n");
+    buf.push_str("  }\n");
     buf.push_str("</style>\n</head>\n<body>\n");
 
     buf.push_str("<div class=\"report-container\">\n");
     buf.push_str("  <div class=\"header\">\n");
     buf.push_str("    <div class=\"title-area\">\n");
-    buf.push_str("      <h1>SymTrace Signed Audit Report</h1>\n");
-    buf.push_str("      <p>Cryptographically Fingerprinted AST Analysis Audit</p>\n");
+    buf.push_str("      <h1>symtrace Audit Report</h1>\n");
+    buf.push_str("      <p>Structural AST Differential Analysis</p>\n");
     buf.push_str("    </div>\n");
     buf.push_str("    <div class=\"meta-group\">\n");
     buf.push_str("      <button onclick=\"window.print()\" class=\"print-btn\">Print / Save PDF</button>\n");
@@ -190,15 +511,29 @@ pub fn format_html(output: &DiffOutput) -> String {
     buf.push_str("    </div>\n");
     buf.push_str("  </div>\n");
 
-    buf.push_str("  <div class=\"signature-card\">\n");
-    buf.push_str("    <div><strong>DIGITAL AUDIT SIGNATURE [VERIFIED]:</strong></div>\n");
-    buf.push_str(&format!("    <div>BLAKE3 Fingerprint: <code>{}</code></div>\n", fingerprint));
-    buf.push_str("    <div>Signer: SymTrace Engine v0.4.5 (Deterministic Cryptographic Hasher)</div>\n");
+    buf.push_str("  <div class=\"notice-card\">\n");
+    buf.push_str(&format!("    <div><strong>Digital Fingerprint:</strong> <code>{}</code></div>\n", fingerprint));
+    buf.push_str("    <div style=\"margin-top:6px; color:var(--text-muted);\">\n");
+    buf.push_str("      <strong>Notice:</strong> This report has been digitally fingerprinted by the symtrace engine for tamper-evidence. This fingerprint confirms only that the file was generated by the engine and has not been altered; it does not verify or guarantee the absolute correctness of the analysis.\n");
+    buf.push_str("    </div>\n");
     buf.push_str("  </div>\n");
 
-    buf.push_str("  <div class=\"disclaimer-card\">\n");
-    buf.push_str("    <strong>DISCLAIMER & LIMITATION OF LIABILITY:</strong> This report is generated automatically using Abstract Syntax Tree (AST) structural heuristics and pattern matching algorithms. While SymTrace strives for maximum theoretical determinism, semantic classifications, similarity scores, and refactor patterns are automated estimations and may differ from actual developer intent or runtime code behavior. This report is provided for informational and audit guidance only, without warranties of 100% accuracy.\n");
-    buf.push_str("  </div>\n");
+    if let Some(ref violations) = output.contract_violations {
+        if !violations.is_empty() {
+            buf.push_str("  <div class=\"notice-card\">\n");
+            buf.push_str(&format!("    <div style=\"font-weight:600;\">Safety Contract Violations ({} Detected):</div>\n", violations.len()));
+            buf.push_str("    <ul style=\"margin:8px 0 0 0; padding-left:20px;\">\n");
+            for v in violations {
+                buf.push_str(&format!(
+                    "      <li><strong>[{}]</strong> <code>{}:L{}</code> &mdash; {} (Rule: <em>{}</em>)</li>\n",
+                    v.severity, v.file_path, v.line, v.message, v.rule
+                ));
+            }
+            buf.push_str("    </ul>\n");
+            buf.push_str("  </div>\n");
+        }
+    }
+
 
     buf.push_str("  <div class=\"summary-grid\">\n");
     buf.push_str(&format!("    <div class=\"stat-card\"><div class=\"stat-label\">Files Audited</div><div class=\"stat-value\">{}</div></div>\n", output.summary.total_files));
@@ -220,14 +555,14 @@ pub fn format_html(output: &DiffOutput) -> String {
     }
     buf.push_str("  </div>\n");
 
-    buf.push_str("  <input type=\"text\" id=\"filterInput\" class=\"search-input\" placeholder=\"Filter audit records (e.g. file path, function name, operation type)...\">\n");
+    buf.push_str("  <input type=\"text\" id=\"filterInput\" class=\"search-input\" placeholder=\"Filter records by file, symbol, or operation...\">\n");
 
     buf.push_str("  <div id=\"fileContainer\">\n");
     for file in &output.files {
         buf.push_str("    <div class=\"file-card\">\n");
         buf.push_str(&format!("      <div class=\"file-header\"><span>{}</span><span>{} Operations</span></div>\n", file.file_path, file.operations.len()));
         if file.operations.is_empty() {
-            buf.push_str("      <div style=\"padding:16px 20px; color:var(--muted); font-size:0.9rem;\">No structural AST modifications detected in this file.</div>\n");
+            buf.push_str("      <div style=\"padding:16px 18px; color:var(--text-muted); font-size:0.85rem;\">No structural AST modifications detected in this file.</div>\n");
         } else {
             buf.push_str("      <table>\n");
             buf.push_str("        <thead><tr><th>Operation</th><th>Details</th><th>Location Range</th><th>Similarity</th></tr></thead>\n");
@@ -259,8 +594,7 @@ pub fn format_html(output: &DiffOutput) -> String {
     buf.push_str("  </div>\n");
 
     buf.push_str("  <div class=\"footer\">\n");
-    buf.push_str(&format!("    <div>Generated & Signed by SymTrace v0.4.5 &bull; Fingerprint: <code>{}</code></div>\n", &fingerprint[..16]));
-    buf.push_str("    <div style=\"font-size:0.75rem; margin-top:4px; color:var(--muted);\">Notice: Automated AST heuristic estimations may differ from actual developer intent or runtime execution.</div>\n");
+    buf.push_str(&format!("    <div>Generated by symtrace v0.5.0 &bull; Fingerprint: <code>{}</code></div>\n", &fingerprint[..16]));
     buf.push_str("  </div>\n");
     buf.push_str("</div>\n");
 
@@ -286,7 +620,7 @@ pub fn format_sarif(output: &DiffOutput) -> Result<String> {
                 "driver": {
                     "name": "symtrace",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://github.com/JashT14/symtrace"
+                    "informationUri": "https://github.com/symtrace/symtrace"
                 }
             },
             "results": output.files.iter().flat_map(|f| {
@@ -312,7 +646,7 @@ pub fn format_cli(output: &DiffOutput) -> String {
     let mut buf = String::new();
 
     // ── Header ───────────────────────────────────────────────────────
-    buf.push_str(&format!("{}\n", "━━━ SymTrace  Semantic Diff ━━━".bold()));
+    buf.push_str(&format!("{}\n", "━━━ symtrace  Semantic Diff ━━━".bold()));
     buf.push_str(&format!("Repository : {}\n", output.repository.cyan()));
     buf.push_str(&format!(
         "Comparing  : {} → {}\n\n",
@@ -445,6 +779,57 @@ pub fn format_cli(output: &DiffOutput) -> String {
             "  Confidence     : {:.0}%\n",
             classification.confidence_score * 100.0
         ));
+        if !classification.intent_labels.is_empty() {
+            buf.push_str(&format!(
+                "  Intent Labels  : {}\n",
+                classification.intent_labels.join(", ").yellow()
+            ));
+        }
+    }
+
+    // ── Contract Violations ───────────────────────────────────────────
+    if let Some(ref violations) = output.contract_violations {
+        if !violations.is_empty() {
+            buf.push_str(&format!("\n{}\n", "━━━ Contract Violations & Security Guards ━━━".bold().red()));
+            for v in violations {
+                buf.push_str(&format!(
+                    "  {} [{}] {}:L{} — {}\n",
+                    "⚠".red().bold(),
+                    v.rule.red().bold(),
+                    v.file_path.bold(),
+                    v.line,
+                    v.message
+                ));
+            }
+        }
+    }
+
+    // ── Semantic Blast Radius ─────────────────────────────────────────
+    if let Some(ref blast_reports) = output.blast_radius {
+        if !blast_reports.is_empty() {
+            buf.push_str(&format!("\n{}\n", "━━━ Semantic Blast Radius ━━━".bold().yellow()));
+            for r in blast_reports {
+                if r.total_impacted_callers > 0 {
+                    buf.push_str(&format!(
+                        "  {} Symbol '{}' in {} (impact: {} downstream caller(s), severity: {})\n",
+                        "⚡".yellow().bold(),
+                        r.modified_symbol.cyan().bold(),
+                        r.file_path,
+                        r.total_impacted_callers,
+                        r.severity.bold()
+                    ));
+                    for caller in &r.impacted_callers {
+                        buf.push_str(&format!(
+                            "    ▸ called by '{}' in {}:L{} (depth: {})\n",
+                            caller.caller_symbol.bold(),
+                            caller.caller_file,
+                            caller.call_site_line,
+                            caller.depth
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     // ── Performance ──────────────────────────────────────────────────
@@ -498,6 +883,7 @@ mod tests {
                     new_location: Some("L15".to_string()),
                     details: "fn process modified".to_string(),
                     similarity: None,
+                    is_logic_op: true,
                 }],
                 refactor_patterns: vec![],
             }],
@@ -520,6 +906,9 @@ mod tests {
                 incremental_parses: 0,
                 nodes_reused: 0,
             },
+            granularity: None,
+            blast_radius: None,
+            contract_violations: None,
         }
     }
 
@@ -560,7 +949,7 @@ mod tests {
     fn format_markdown_renders_table() {
         let sample = sample_output();
         let res = format_markdown(&sample);
-        assert!(res.contains("# SymTrace Semantic Diff Report"));
+        assert!(res.contains("# symtrace Semantic Diff Report"));
         assert!(res.contains("`src/main.rs`"));
     }
 
@@ -578,5 +967,49 @@ mod tests {
         let res = format_sarif(&sample).unwrap();
         assert!(res.contains("2.1.0"));
         assert!(res.contains("symtrace"));
+    }
+
+    #[test]
+    fn test_determine_granularity_auto_detection() {
+        let sample = sample_output(); // 1 file, 1 op -> MicroCompact
+        let auto_mode = determine_granularity(&sample, false, false);
+        assert_eq!(auto_mode, DisplayGranularity::MicroCompact);
+
+        let forced_compact = determine_granularity(&sample, true, false);
+        assert_eq!(forced_compact, DisplayGranularity::MicroCompact);
+
+        let forced_headers = determine_granularity(&sample, false, true);
+        assert_eq!(forced_headers, DisplayGranularity::FullStructural);
+    }
+
+    #[test]
+    fn test_format_micro_cli_output() {
+        let sample = sample_output();
+        let micro_res = format_micro_cli(&sample);
+        assert!(micro_res.contains("src/main.rs:L15"));
+        assert!(micro_res.contains("[MODIFY]"));
+        assert!(micro_res.contains("fn process modified"));
+        assert!(!micro_res.contains("━━━ Summary ━━━")); // Suppressed in micro mode
+    }
+
+    #[test]
+    fn test_format_cli_with_granularity() {
+        let sample = sample_output();
+        let micro = format_cli_with_granularity(&sample, DisplayGranularity::MicroCompact);
+        let standard = format_cli_with_granularity(&sample, DisplayGranularity::Standard);
+        let full = format_cli_with_granularity(&sample, DisplayGranularity::FullStructural);
+
+        assert!(!micro.contains("━━━ Performance ━━━"));
+        assert!(standard.contains("━━━ Summary ━━━"));
+        assert!(full.contains("━━━ Performance ━━━"));
+    }
+
+    #[test]
+    fn test_format_prompt_renders_llm_context() {
+        let sample = sample_output();
+        let prompt_out = format_prompt(&sample);
+        assert!(prompt_out.contains("=== symtrace SEMANTIC CONTEXT ==="));
+        assert!(prompt_out.contains("--- STRUCTURAL MODIFICATIONS ---"));
+        assert!(prompt_out.contains("[MODIFIED] fn process modified (src/main.rs at L15)"));
     }
 }

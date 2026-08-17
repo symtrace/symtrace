@@ -7,7 +7,7 @@ import * as https from "https";
 import { Logger } from "./logger";
 
 const BINARY_NAME = os.platform() === "win32" ? "symtrace.exe" : "symtrace";
-const GITHUB_REPO = "JashT14/symtrace";
+const GITHUB_REPO = "symtrace/symtrace";
 
 export async function resolveBinary(
   context: vscode.ExtensionContext,

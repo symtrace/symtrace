@@ -1,9 +1,9 @@
 # Symtrace Standalone Universal PowerShell Installer (Windows)
-# Repository: https://github.com/JashT14/symtrace
+# Repository: https://github.com/symtrace/symtrace
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "JashT14/symtrace"
+$Repo = "symtrace/symtrace"
 $Target = "x86_64-pc-windows-msvc"
 $ZipName = "symtrace-$Target.zip"
 $DownloadUrl = "https://github.com/$Repo/releases/latest/download/$ZipName"
@@ -17,7 +17,7 @@ function Show-Banner {
     Write-Host "  ___) | |_| | | | | | | | |_| | | (_| | (_|  __/" -ForegroundColor Cyan
     Write-Host " |____/ \__, | |_| |_| |_|\__|_|  \__,_|\___\___|" -ForegroundColor Cyan
     Write-Host "        |___/                                    " -ForegroundColor Cyan
-    Write-Host "   Deterministic AST Semantic Diff Engine v0.4.5" -ForegroundColor Magenta
+    Write-Host "   Deterministic AST Semantic Diff Engine v0.5.0" -ForegroundColor Magenta
     Write-Host "───────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
 }

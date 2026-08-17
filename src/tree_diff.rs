@@ -9,20 +9,20 @@ use crate::types::{AstNode, EntityType, OperationRecord, OperationType};
 
 #[derive(Debug, Clone)]
 pub struct SignificantNode {
-    id: u64,
-    kind: String,
-    name: String,
-    structural_hash: [u8; 32],
-    content_hash: [u8; 32],
-    context_hash: [u8; 32],
-    identity_hash: [u8; 32],
-    start_row: usize,
-    end_row: usize,
-    path: Vec<String>,
+    pub id: u64,
+    pub kind: String,
+    pub name: String,
+    pub structural_hash: [u8; 32],
+    pub content_hash: [u8; 32],
+    pub context_hash: [u8; 32],
+    pub identity_hash: [u8; 32],
+    pub start_row: usize,
+    pub end_row: usize,
+    pub path: Vec<String>,
     /// Full AST subtree – kept so we can run deep similarity scoring.
-    ast_node: AstNode,
+    pub ast_node: AstNode,
     /// Cached subtree node count (avoids redundant traversals).
-    subtree_size: u64,
+    pub subtree_size: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -64,46 +64,75 @@ pub struct GlobalNodeIndex {
 
 #[allow(dead_code)]
 impl GlobalNodeIndex {
-    /// Build a global node index from a collection of file paths and their AST trees.
+    /// Build a global node index concurrently across all files via Rayon pipeline.
     pub fn build(files: &[(&str, &AstNode)]) -> Self {
+        let local_maps: Vec<(
+            HashMap<[u8; 32], Vec<GlobalNodeRef>>,
+            HashMap<[u8; 32], Vec<GlobalNodeRef>>,
+            HashMap<String, HashMap<String, Vec<GlobalNodeRef>>>,
+        )> = files
+            .par_iter()
+            .map(|(path, ast)| {
+                let mut local_structural: HashMap<[u8; 32], Vec<GlobalNodeRef>> = HashMap::new();
+                let mut local_identity: HashMap<[u8; 32], Vec<GlobalNodeRef>> = HashMap::new();
+                let mut local_kind_name: HashMap<String, HashMap<String, Vec<GlobalNodeRef>>> = HashMap::new();
+
+                let nodes = collect_significant_nodes(ast, &[]);
+                for n in nodes {
+                    let gref = GlobalNodeRef {
+                        file_path: path.to_string(),
+                        node_id: n.id,
+                        kind: n.kind,
+                        name: n.name,
+                        structural_hash: n.structural_hash,
+                        content_hash: n.content_hash,
+                        identity_hash: n.identity_hash,
+                        start_row: n.start_row,
+                        end_row: n.end_row,
+                        subtree_size: n.subtree_size,
+                        ast_node: n.ast_node,
+                    };
+
+                    local_structural
+                        .entry(gref.structural_hash)
+                        .or_default()
+                        .push(gref.clone());
+
+                    local_identity
+                        .entry(gref.identity_hash)
+                        .or_default()
+                        .push(gref.clone());
+
+                    if !gref.name.is_empty() {
+                        local_kind_name
+                            .entry(gref.kind.clone())
+                            .or_default()
+                            .entry(gref.name.clone())
+                            .or_default()
+                            .push(gref);
+                    }
+                }
+
+                (local_structural, local_identity, local_kind_name)
+            })
+            .collect();
+
+        // Lock-free merge of thread-local indexes
         let mut by_structural_hash: HashMap<[u8; 32], Vec<GlobalNodeRef>> = HashMap::new();
         let mut by_identity_hash: HashMap<[u8; 32], Vec<GlobalNodeRef>> = HashMap::new();
         let mut by_kind_name: HashMap<String, HashMap<String, Vec<GlobalNodeRef>>> = HashMap::new();
 
-        for (path, ast) in files {
-            let nodes = collect_significant_nodes(ast, &[]);
-            for n in nodes {
-                let gref = GlobalNodeRef {
-                    file_path: path.to_string(),
-                    node_id: n.id,
-                    kind: n.kind,
-                    name: n.name,
-                    structural_hash: n.structural_hash,
-                    content_hash: n.content_hash,
-                    identity_hash: n.identity_hash,
-                    start_row: n.start_row,
-                    end_row: n.end_row,
-                    subtree_size: n.subtree_size,
-                    ast_node: n.ast_node,
-                };
-
-                by_structural_hash
-                    .entry(gref.structural_hash)
-                    .or_default()
-                    .push(gref.clone());
-
-                by_identity_hash
-                    .entry(gref.identity_hash)
-                    .or_default()
-                    .push(gref.clone());
-
-                if !gref.name.is_empty() {
-                    by_kind_name
-                        .entry(gref.kind.clone())
-                        .or_default()
-                        .entry(gref.name.clone())
-                        .or_default()
-                        .push(gref);
+        for (local_structural, local_identity, local_kind_name) in local_maps {
+            for (k, v) in local_structural {
+                by_structural_hash.entry(k).or_default().extend(v);
+            }
+            for (k, v) in local_identity {
+                by_identity_hash.entry(k).or_default().extend(v);
+            }
+            for (kind, name_map) in local_kind_name {
+                let entry = by_kind_name.entry(kind).or_default();
+                for (name, nodes) in name_map {
+                    entry.entry(name).or_default().extend(nodes);
                 }
             }
         }
@@ -297,6 +326,7 @@ pub fn compute_multi_file_diff(
                             new_location: Some(new_loc_str),
                             details: format!("Moved to {}:L{}", new_path, matched_node.start_row + 1),
                             similarity: sim,
+                            is_logic_op: true,
                         });
                     }
                     if let Some(ops) = file_ops.get_mut(new_path) {
@@ -328,6 +358,7 @@ pub fn compute_multi_file_diff(
                                 new_location: ins_op.new_location.as_ref().map(|loc| format!("{}:{}", new_path, loc)),
                                 details: format!("Moved to {}:{}", new_path, ins_op.new_location.as_deref().unwrap_or("")),
                                 similarity: sim,
+                                is_logic_op: true,
                             });
                         }
                         if let Some(ops) = file_ops.get_mut(new_path) {
@@ -368,8 +399,61 @@ pub fn compute_structural_diff_windowed(
     file_size_bytes: usize,
     changed_windows: Option<&[(usize, usize)]>,
 ) -> Vec<OperationRecord> {
+    // 0. Exact Root Identity Shortcut
+    if ast_a.structural_hash == ast_b.structural_hash && ast_a.content_hash == ast_b.content_hash {
+        return Vec::new();
+    }
+
     let nodes_a = collect_significant_nodes_windowed(ast_a, &[], file_size_bytes, changed_windows);
     let nodes_b = collect_significant_nodes_windowed(ast_b, &[], file_size_bytes, changed_windows);
+
+    // Fast-Path for Micro-Edits: If both ASTs are structurally isomorphic (identical structural_hash)
+    // and have matching significant node counts, execute a fast linear 1:1 scan without index building.
+    if ast_a.structural_hash == ast_b.structural_hash && nodes_a.len() == nodes_b.len() {
+        let mut fast_ops = Vec::new();
+        for (na, nb) in nodes_a.iter().zip(nodes_b.iter()) {
+            if na.content_hash != nb.content_hash && na.kind == nb.kind {
+                let entity = classify_entity(&na.kind);
+                let similarity = Some(semantic_similarity::compute_similarity(
+                    &na.ast_node,
+                    &nb.ast_node,
+                ));
+                let is_logic = !node_identity::is_comment_or_whitespace(&na.kind);
+                if na.name == nb.name {
+                    fast_ops.push(OperationRecord {
+                        op_type: OperationType::Modify,
+                        entity_type: entity,
+                        old_location: Some(format_location(na)),
+                        new_location: Some(format_location(nb)),
+                        details: format!("{} '{}' modified", na.kind, na.name),
+                        similarity,
+                        is_logic_op: is_logic,
+                    });
+                } else if node_identity::only_identifiers_changed(&na.ast_node, &nb.ast_node) {
+                    fast_ops.push(OperationRecord {
+                        op_type: OperationType::Rename,
+                        entity_type: entity,
+                        old_location: Some(format_location(na)),
+                        new_location: Some(format_location(nb)),
+                        details: format!("{} renamed from '{}' to '{}'", na.kind, na.name, nb.name),
+                        similarity,
+                        is_logic_op: is_logic,
+                    });
+                } else {
+                    fast_ops.push(OperationRecord {
+                        op_type: OperationType::Modify,
+                        entity_type: entity,
+                        old_location: Some(format_location(na)),
+                        new_location: Some(format_location(nb)),
+                        details: format!("{} '{}' modified", na.kind, na.name),
+                        similarity,
+                        is_logic_op: is_logic,
+                    });
+                }
+            }
+        }
+        return fast_ops;
+    }
 
     // Build hash-bucket index for B-side nodes (O(n) build, O(1) lookups)
     let index_b = NodeIndex::build(&nodes_b);
@@ -552,6 +636,7 @@ pub fn compute_structural_diff_windowed(
         ));
         match match_type {
             MatchType::Moved => {
+                let is_logic = !node_identity::is_comment_or_whitespace(&na.kind);
                 ops.push(OperationRecord {
                     op_type: OperationType::Move,
                     entity_type: entity,
@@ -559,9 +644,11 @@ pub fn compute_structural_diff_windowed(
                     new_location: Some(format_location(nb)),
                     details: format!("{} '{}' moved", na.kind, na.name),
                     similarity,
+                    is_logic_op: is_logic,
                 });
             }
             MatchType::Renamed => {
+                let is_logic = !node_identity::is_comment_or_whitespace(&na.kind);
                 ops.push(OperationRecord {
                     op_type: OperationType::Rename,
                     entity_type: entity,
@@ -569,9 +656,11 @@ pub fn compute_structural_diff_windowed(
                     new_location: Some(format_location(nb)),
                     details: format!("{} renamed from '{}' to '{}'", na.kind, na.name, nb.name),
                     similarity,
+                    is_logic_op: is_logic,
                 });
             }
             MatchType::Modified => {
+                let is_logic = !node_identity::is_comment_or_whitespace(&na.kind);
                 ops.push(OperationRecord {
                     op_type: OperationType::Modify,
                     entity_type: entity,
@@ -579,6 +668,7 @@ pub fn compute_structural_diff_windowed(
                     new_location: Some(format_location(nb)),
                     details: format!("{} '{}' modified", na.kind, na.name),
                     similarity,
+                    is_logic_op: is_logic,
                 });
             }
         }
@@ -587,6 +677,7 @@ pub fn compute_structural_diff_windowed(
     // ── Phase 4: unmatched old nodes → DELETE ────────────────────────
     for na in &nodes_a {
         if !matched_a.contains(&na.id) {
+            let is_logic = !node_identity::is_comment_or_whitespace(&na.kind);
             ops.push(OperationRecord {
                 op_type: OperationType::Delete,
                 entity_type: classify_entity(&na.kind),
@@ -594,6 +685,7 @@ pub fn compute_structural_diff_windowed(
                 new_location: None,
                 details: format!("{} '{}' deleted", na.kind, na.name),
                 similarity: None,
+                is_logic_op: is_logic,
             });
         }
     }
@@ -601,6 +693,7 @@ pub fn compute_structural_diff_windowed(
     // ── Phase 5: unmatched new nodes → INSERT ────────────────────────
     for nb in &nodes_b {
         if !matched_b.contains(&nb.id) {
+            let is_logic = !node_identity::is_comment_or_whitespace(&nb.kind);
             ops.push(OperationRecord {
                 op_type: OperationType::Insert,
                 entity_type: classify_entity(&nb.kind),
@@ -608,6 +701,7 @@ pub fn compute_structural_diff_windowed(
                 new_location: Some(format_location(nb)),
                 details: format!("{} '{}' inserted", nb.kind, nb.name),
                 similarity: None,
+                is_logic_op: is_logic,
             });
         }
     }
@@ -620,31 +714,73 @@ pub const OVERSIZED_FILE_THRESHOLD_BYTES: usize = 1_048_576;
 
 /// Collect significant AST nodes, optionally filtering by changed line window ranges
 /// if the file size exceeds `OVERSIZED_FILE_THRESHOLD_BYTES`.
+///
+/// Uses recursive subtree descent pruning to skip traversing and allocating unchanged
+/// AST subtrees entirely on oversized files.
 pub fn collect_significant_nodes_windowed(
     node: &AstNode,
     parent_path: &[String],
     file_size_bytes: usize,
     changed_windows: Option<&[(usize, usize)]>,
 ) -> Vec<SignificantNode> {
-    let all_nodes = collect_significant_nodes(node, parent_path);
-
     if file_size_bytes <= OVERSIZED_FILE_THRESHOLD_BYTES || changed_windows.is_none() {
-        return all_nodes;
+        return collect_significant_nodes(node, parent_path);
     }
 
     let windows = match changed_windows {
         Some(w) if !w.is_empty() => w,
-        _ => return all_nodes,
+        _ => return collect_significant_nodes(node, parent_path),
     };
 
-    all_nodes
-        .into_iter()
-        .filter(|n| {
-            windows.iter().any(|&(w_start, w_end)| {
-                n.start_row <= w_end && n.end_row >= w_start
-            })
-        })
-        .collect()
+    let mut result = Vec::new();
+    collect_windowed_recursive(node, parent_path, windows, &mut result);
+    result
+}
+
+fn collect_windowed_recursive(
+    node: &AstNode,
+    parent_path: &[String],
+    windows: &[(usize, usize)],
+    result: &mut Vec<SignificantNode>,
+) {
+    // Check if this node or any of its children overlaps any modified hunk window
+    let overlaps_window = windows.iter().any(|&(w_start, w_end)| {
+        node.start_row <= w_end && node.end_row >= w_start
+    });
+
+    if !overlaps_window {
+        return; // Subtree pruned!
+    }
+
+    if is_significant_kind(&node.kind) {
+        let name = extract_name(node);
+        let mut current_path = Vec::with_capacity(parent_path.len() + 1);
+        current_path.extend_from_slice(parent_path);
+        current_path.push(format!("{}:{}", node.kind, name));
+
+        result.push(SignificantNode {
+            id: node.id,
+            kind: node.kind.clone(),
+            name,
+            structural_hash: node.structural_hash,
+            content_hash: node.content_hash,
+            context_hash: node.context_hash,
+            identity_hash: node.identity_hash,
+            start_row: node.start_row,
+            end_row: node.end_row,
+            path: current_path.clone(),
+            ast_node: node.clone(),
+            subtree_size: count_nodes(node),
+        });
+
+        for child in &node.children {
+            collect_windowed_recursive(child, &current_path, windows, result);
+        }
+    } else {
+        for child in &node.children {
+            collect_windowed_recursive(child, parent_path, windows, result);
+        }
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -699,7 +835,7 @@ fn collect_significant_nodes(node: &AstNode, parent_path: &[String]) -> Vec<Sign
 
 /// Try to extract a human-readable name from a node by looking at its
 /// identifier children.
-fn extract_name(node: &AstNode) -> String {
+pub fn extract_name(node: &AstNode) -> String {
     // Direct children
     for child in &node.children {
         if is_name_bearing_kind(&child.kind) && !child.text.is_empty() {
@@ -773,6 +909,8 @@ fn is_significant_kind(kind: &str) -> bool {
             // Modules
             | "mod_item"
             | "module"
+            // JSON pair / object
+            | "pair"
             // Decorators / annotations
             | "decorator"
             | "annotation"
@@ -807,7 +945,8 @@ fn classify_entity(kind: &str) -> EntityType {
         | "variable_declarator"
         | "lexical_declaration"
         | "const_declaration"
-        | "assignment_statement" => EntityType::Variable,
+        | "assignment_statement"
+        | "pair" => EntityType::Variable,
 
         "block" | "statement_block" => EntityType::Block,
 
@@ -821,13 +960,17 @@ fn collect_all_as_inserts(node: &AstNode) -> Vec<OperationRecord> {
     let nodes = collect_significant_nodes(node, &[]);
     nodes
         .into_iter()
-        .map(|n| OperationRecord {
-            op_type: OperationType::Insert,
-            entity_type: classify_entity(&n.kind),
-            old_location: None,
-            new_location: Some(format_location(&n)),
-            details: format!("{} '{}' inserted", n.kind, n.name),
-            similarity: None,
+        .map(|n| {
+            let is_logic = !node_identity::is_comment_or_whitespace(&n.kind);
+            OperationRecord {
+                op_type: OperationType::Insert,
+                entity_type: classify_entity(&n.kind),
+                old_location: None,
+                new_location: Some(format_location(&n)),
+                details: format!("{} '{}' inserted", n.kind, n.name),
+                similarity: None,
+                is_logic_op: is_logic,
+            }
         })
         .collect()
 }
@@ -836,13 +979,17 @@ fn collect_all_as_deletes(node: &AstNode) -> Vec<OperationRecord> {
     let nodes = collect_significant_nodes(node, &[]);
     nodes
         .into_iter()
-        .map(|n| OperationRecord {
-            op_type: OperationType::Delete,
-            entity_type: classify_entity(&n.kind),
-            old_location: Some(format_location(&n)),
-            new_location: None,
-            details: format!("{} '{}' deleted", n.kind, n.name),
-            similarity: None,
+        .map(|n| {
+            let is_logic = !node_identity::is_comment_or_whitespace(&n.kind);
+            OperationRecord {
+                op_type: OperationType::Delete,
+                entity_type: classify_entity(&n.kind),
+                old_location: Some(format_location(&n)),
+                new_location: None,
+                details: format!("{} '{}' deleted", n.kind, n.name),
+                similarity: None,
+                is_logic_op: is_logic,
+            }
         })
         .collect()
 }
@@ -1171,5 +1318,73 @@ mod tests {
         assert!(result.contains_key("a.rs"));
         let ops_a = &result["a.rs"];
         assert!(ops_a.iter().any(|o| o.op_type == OperationType::Move), "expected MOVE op: {ops_a:?}");
+    }
+
+    #[test]
+    fn test_classify_entity_all_branches() {
+        assert_eq!(classify_entity("function_item"), EntityType::Function);
+        assert_eq!(classify_entity("struct_item"), EntityType::Class);
+        assert_eq!(classify_entity("let_declaration"), EntityType::Variable);
+        assert_eq!(classify_entity("block"), EntityType::Block);
+        assert_eq!(classify_entity("unknown_custom_kind"), EntityType::Other);
+    }
+
+    #[test]
+    fn test_is_significant_kind_all_branches() {
+        assert!(is_significant_kind("function_item"));
+        assert!(is_significant_kind("struct_item"));
+        assert!(is_significant_kind("use_declaration"));
+        assert!(is_significant_kind("mod_item"));
+        assert!(is_significant_kind("decorator"));
+        assert!(!is_significant_kind("comment"));
+    }
+
+    #[test]
+    fn test_compute_diff_none_trees() {
+        let ops = compute_diff(None, None, false);
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_global_node_index_empty() {
+        let index = GlobalNodeIndex::build(&[]);
+        assert!(index.by_structural_hash.is_empty());
+        assert!(index.by_kind_name.is_empty());
+    }
+
+    #[test]
+    fn test_compute_multi_file_diff_empty() {
+        let res = compute_multi_file_diff(&[], &[], false);
+        assert!(res.is_empty());
+    }
+
+    #[test]
+    fn test_c_function_insert_and_delete() {
+        let old_src = "int add(int a, int b) { return a + b; }";
+        let new_src = "int sub(int a, int b) { return a - b; }";
+        let a = parse(old_src, SupportedLanguage::C);
+        let b = parse(new_src, SupportedLanguage::C);
+        let ops = compute_diff(Some(&a), Some(&b), false);
+        assert!(!ops.is_empty());
+    }
+
+    #[test]
+    fn test_go_function_rename() {
+        let old_src = "package main\nfunc foo() int { return 1 }";
+        let new_src = "package main\nfunc bar() int { return 1 }";
+        let a = parse(old_src, SupportedLanguage::Go);
+        let b = parse(new_src, SupportedLanguage::Go);
+        let ops = compute_diff(Some(&a), Some(&b), false);
+        assert!(!ops.is_empty());
+    }
+
+    #[test]
+    fn test_json_key_modify() {
+        let old_src = "{\"key\": \"val1\"}";
+        let new_src = "{\"key\": \"val2\"}";
+        let a = parse(old_src, SupportedLanguage::Json);
+        let b = parse(new_src, SupportedLanguage::Json);
+        let ops = compute_diff(Some(&a), Some(&b), false);
+        assert!(!ops.is_empty());
     }
 }

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/JashT14/symtrace/main/vscode-symtrace/media/symtrace-banner.jpg" alt="symtrace banner" width="700">
+  <img src="https://raw.githubusercontent.com/symtrace/symtrace/main/vscode-symtrace/media/symtrace-banner.jpg" alt="symtrace banner" width="700">
 </p>
 
 # symtrace
@@ -54,15 +54,19 @@ When `symtrace` analyzes a diff, operations are classified into five primary typ
 | **`[INSERT]`** | A new function, struct, class, or code block was added. | Declaring a new helper function `fn validate_token`. |
 | **`[DELETE]`** | A function, struct, class, or code block was removed. | Removing a deprecated legacy function. |
 
-## Features (v0.4.5)
+## Features (v0.5.0)
 
 - **Understands Code Structure:** Sees true code changes like moved functions or renamed variables without getting confused by formatting tweaks or comment updates.
+- **Adaptive Granularity:** Intelligently switches between micro-compact 1–3 line summaries (`--compact`) and full structural views, eliminating micro-commit noise overhead.
+- **Cross-File Call Graph & Blast Radius:** Traces transitive caller impact up to depth 5 across file boundaries when signatures change.
+- **Contract Violation & Safety Guard Alerts:** Detects removed null checks, deleted bounds guards, stripped mutex locks, or omitted resource cleanup.
+- **Declarative AST Semantic Linter (`symtrace lint`):** Evaluates custom Tree-sitter `.scm` rules with CI severity thresholding.
+- **LLM Context Optimization (`--format prompt`):** Ultra-dense serialization reducing token consumption by 80% for AI coding assistants.
 - **Multi-Language Support:** Works seamlessly across 13 popular languages & formats: Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, JSON, C#, Ruby, PHP, and Rust 2024.
 - **Plugs Right Into Git:** Integrates directly with your existing Git workflow as a drop-in `git diff` replacement or native 3-way merge driver.
-- **Interactive TUI Inspector (`symtrace tui`):** Includes a zero-flicker terminal workspace with arrow-key controls to scroll files, inspect operations, and view line details.
+- **Interactive TUI Inspector (`symtrace tui`):** Zero-flicker terminal workspace with arrow-key controls to scroll files, inspect operations, and view line details.
 - **White-Mode HTML & PDF Export:** Generates professional white-mode reports (`symtrace_report.html`) complete with a `Print / Save PDF` button and cryptographic BLAKE3 digital signatures.
-- **Detects Refactoring Patterns:** Automatically identifies structural refactors (like function extraction or variable renames) and categorizes commit intent.
-- **Blazing Fast & Offline:** Built in high-performance Rust with zero-copy Git OID caching, operating 100% locally with zero network calls.
+- **Two-Tier CAS Caching & SIMD Acceleration:** Warm diff cache hits in $< 0.004$ ms and SIMD-vectorized token multiset similarity scoring.
 
 ## Supported Languages
 
@@ -86,18 +90,18 @@ When `symtrace` analyzes a diff, operations are classified into five primary typ
 ### Linux / macOS (Shell Script)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JashT14/symtrace/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/symtrace/symtrace/main/install.sh | bash
 ```
 
 ### Windows (PowerShell Script)
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/JashT14/symtrace/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/symtrace/symtrace/main/install.ps1 | iex
 ```
 
 ## Command Usage & Examples
 
-### 1. Basic Diff Execution
+### 1. Basic Diff Execution & Adaptive Granularity
 
 ```bash
 # Compare uncommitted working tree changes against HEAD in current directory
@@ -109,16 +113,46 @@ symtrace . HEAD --staged
 # Compare two specific commits or branches
 symtrace . main feature-branch
 symtrace . HEAD~1 HEAD
+
+# Force micro-compact 1-3 line inline token summaries (ideal for small edits)
+symtrace . HEAD~1 HEAD --compact
+
+# Force full structural headers and diagnostic banners
+symtrace . HEAD~1 HEAD --full-headers
 ```
 
-### 2. Interactive Terminal UI (TUI)
+### 2. AI / LLM Prompt Context Exporter (`--format prompt`)
 
 ```bash
-# Launch interactive terminal inspector with arrow-key controls
+# Generate ultra-dense structural context optimized for LLMs (Gemini, Claude, GPT)
+# Consumes ~80% fewer prompt tokens than unified diffs while exposing contract violations
+symtrace . HEAD~1 HEAD --format prompt
+```
+
+### 3. Declarative AST Semantic Linter (`symtrace lint`)
+
+```bash
+# Evaluate custom Tree-sitter .scm rules in the repository
+symtrace lint
+
+# Lint a specific file or directory
+symtrace lint src/server.rs
+
+# Enforce strict CI threshold (fail if warnings > 0)
+symtrace lint . --max-warnings 0
+
+# Emit linter diagnostics as JSON or SARIF for automated CI pipelines
+symtrace lint . --format sarif
+```
+
+### 4. Interactive Terminal UI (TUI)
+
+```bash
+# Launch interactive zero-flicker terminal inspector with arrow-key controls
 symtrace tui HEAD~1 HEAD
 ```
 
-### 3. File & Path Filtering
+### 5. File & Path Filtering
 
 ```bash
 # Restrict AST diffing to Rust source files in src/
@@ -128,17 +162,17 @@ symtrace . HEAD~1 HEAD --path "src/**/*.rs"
 symtrace . HEAD~1 HEAD -p "**/*.{js,ts}"
 ```
 
-### 4. Ignoring Comments & Whitespace
+### 6. Ignoring Comments & Whitespace
 
 ```bash
 # Evaluate strictly logic-only AST nodes (ignores all comments & whitespace)
 symtrace . HEAD~1 HEAD --logic-only
 ```
 
-### 5. Multi-Format Reporting & Export
+### 7. Multi-Format Reporting & Export
 
 ```bash
-# Generate a White-Mode HTML report (symtrace_report.html) and open in default browser
+# Generate a White-Mode HTML report (symtrace_report.html) with digital signatures
 symtrace . HEAD~1 HEAD --format html
 
 # Emit high-level semantic summary table
@@ -151,41 +185,51 @@ symtrace . HEAD~1 HEAD --format json
 symtrace . HEAD~1 HEAD --format sarif
 ```
 
-### 6. Pre-Commit Verification & CI Quality Gates
+### 8. Drop-in Git Diff Driver Integration
+
+Configure `symtrace` as your default `GIT_EXTERNAL_DIFF`:
 
 ```bash
-# Exits with status code 1 if structural semantic changes are detected
-symtrace . HEAD~1 HEAD --check
+# Set symtrace git-diff-driver for a single git invocation
+GIT_EXTERNAL_DIFF="symtrace git-diff-driver" git diff HEAD~1
+
+# Or configure globally in git
+git config --global diff.external "symtrace git-diff-driver"
 ```
 
 ## Subcommands & Integration
 
-### Interactive TUI (`symtrace tui`)
+### Declarative AST Linter (`symtrace lint`)
 
-Launch an interactive terminal inspector:
+Run Tree-sitter query rules defined in `.symtrace/queries/*.scm`:
 
-- `Up` / `Down` Arrow keys to scroll files and operations.
-- `Right` / `Left` Arrow keys or `Tab` to switch focus pane.
-- `q` or `Esc` to exit cleanly.
+```scheme
+;; .symtrace/queries/no_unwrap.scm
+;; @id no-unwrap-in-production
+;; @severity ERROR
+;; @message Avoid calling unwrap() in production code; handle Result gracefully.
+(call_expression
+  function: (field_expression field: (field_identifier) @method (#eq? @method "unwrap")))
+```
 
 ### Native 3-Way AST Merge Driver (`symtrace merge-driver`)
 
 Configure `symtrace` as a native 3-way merge driver in `.gitconfig`:
 
 ```bash
-git config merge.symtrace.name "SymTrace 3-Way AST Merge Driver"
+git config merge.symtrace.name "symtrace 3-Way AST Merge Driver"
 git config merge.symtrace.driver "symtrace merge-driver %O %A %B %P"
 ```
 
 ### Flexible Export Formats (`--format <FMT>`)
 
-Supports `--format ansi`, `--format json`, `--format jsonl`, `--format markdown`, `--format html`, and `--format sarif`.
+Supports `--format ansi`, `--format json`, `--format jsonl`, `--format markdown`, `--format html`, `--format prompt`, and `--format sarif`.
 
 ## Frequently Asked Questions (FAQ)
 
 ### Does `symtrace` replace standard Git commands?
 
-No. `symtrace` operates alongside Git as a non-destructive analysis tool. Standard `git diff` remains fully functional. `symtrace` provides a higher-level structural perspective during code reviews and complex refactoring audits.
+No. `symtrace` operates alongside Git as a non-destructive analysis tool. Standard `git diff` remains fully functional. `symtrace` provides a higher-level structural perspective during code reviews, CI linting, and complex refactoring audits.
 
 ### Is source code processed locally or sent to a cloud server?
 
@@ -193,7 +237,7 @@ All analysis runs 100% locally on your machine. `symtrace` is completely offline
 
 ### How do I use `symtrace` inside VS Code?
 
-Install the **Symtrace for VS Code** extension from the VS Code Marketplace. It integrates a dedicated sidebar panel, inline decorations, and side-by-side diff views directly within your editor.
+Install the **symtrace for VS Code** extension from the VS Code Marketplace. It integrates a dedicated sidebar panel, inline decorations, and side-by-side diff views directly within your editor.
 
 ## Additional Documentation
 
@@ -201,7 +245,6 @@ Install the **Symtrace for VS Code** extension from the VS Code Marketplace. It 
 - [SECURITY.md](SECURITY.md) - Security policy & supply chain guarantees.
 - [BENCHMARKS.md](BENCHMARKS.md) - Performance benchmark reports.
 - [CHANGELOG.md](CHANGELOG.md) - Version release history & changelog.
-
 - [BENCHMARKING_PROTOCOL.md](BENCHMARKING_PROTOCOL.md) - Research benchmarking protocol & plan.
 - [BENCHMARKS_RESULTS.md](BENCHMARKS_RESULTS.md) - Research benchmarking results.
 

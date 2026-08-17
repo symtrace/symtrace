@@ -170,6 +170,13 @@ pub struct OperationRecord {
     pub details: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity: Option<SimilarityScore>,
+    #[serde(default = "default_true")]
+    pub is_logic_op: bool,
+}
+
+#[inline]
+fn default_true() -> bool {
+    true
 }
 
 // ── Diff Output (JSON Schema) ────────────────────────────────────────
@@ -210,6 +217,53 @@ pub struct PerformanceMetrics {
     pub nodes_reused: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayGranularity {
+    MicroCompact,
+    Standard,
+    FullStructural,
+}
+
+impl std::fmt::Display for DisplayGranularity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MicroCompact => write!(f, "micro_compact"),
+            Self::Standard => write!(f, "standard"),
+            Self::FullStructural => write!(f, "full_structural"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImpactedCaller {
+    pub caller_symbol: String,
+    pub caller_file: String,
+    pub call_site_line: usize,
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlastRadiusReport {
+    pub modified_symbol: String,
+    pub file_path: String,
+    pub total_impacted_callers: usize,
+    pub impacted_callers: Vec<ImpactedCaller>,
+    pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractViolation {
+    pub file_path: String,
+    pub rule: String,
+    pub message: String,
+    pub line: usize,
+    pub severity: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffOutput {
@@ -223,6 +277,12 @@ pub struct DiffOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_classification: Option<CommitClassification>,
     pub performance: PerformanceMetrics,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granularity: Option<DisplayGranularity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blast_radius: Option<Vec<BlastRadiusReport>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_violations: Option<Vec<ContractViolation>>,
 }
 
 // ── Similarity Scoring ───────────────────────────────────────────────
@@ -375,6 +435,8 @@ impl std::fmt::Display for CommitClass {
 pub struct CommitClassification {
     pub primary_class: CommitClass,
     pub confidence_score: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intent_labels: Vec<String>,
 }
 
 // ── Parser Resource Limits ───────────────────────────────────────────
@@ -493,6 +555,7 @@ mod tests {
             new_location: Some("L10".to_string()),
             details: "function_item 'foo' inserted".to_string(),
             similarity: None,
+            is_logic_op: true,
         };
         let json = serde_json::to_string(&record).expect("serialize");
         let decoded: OperationRecord = serde_json::from_str(&json).expect("deserialize");
@@ -500,6 +563,7 @@ mod tests {
         assert_eq!(decoded.entity_type, EntityType::Function);
         assert!(decoded.old_location.is_none());
         assert_eq!(decoded.new_location.as_deref(), Some("L10"));
+        assert!(decoded.is_logic_op);
     }
 
     #[test]
@@ -511,6 +575,7 @@ mod tests {
             new_location: Some("L5".to_string()),
             details: "x".to_string(),
             similarity: None,
+            is_logic_op: true,
         };
         let json = serde_json::to_string(&record).expect("serialize");
         assert!(
@@ -528,6 +593,7 @@ mod tests {
             new_location: None,
             details: "y".to_string(),
             similarity: None,
+            is_logic_op: true,
         };
         let json = serde_json::to_string(&record).expect("serialize");
         assert!(
@@ -609,5 +675,93 @@ mod tests {
         let cloned = fc.clone();
         assert_eq!(cloned.path, "src/lib.rs");
         assert_eq!(cloned.status, ChangeStatus::Modified);
+    }
+
+    #[test]
+    fn test_parser_limits_default_and_hash() {
+        let limits = ParserLimits::default();
+        assert_eq!(limits.max_file_size_bytes, 5_242_880);
+        let h1 = limits.compute_limits_hash();
+        let h2 = limits.compute_limits_hash();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_commit_class_display_all_variants() {
+        assert_eq!(CommitClass::Refactor.to_string(), "refactor");
+        assert_eq!(CommitClass::Feature.to_string(), "feature");
+        assert_eq!(CommitClass::BugFix.to_string(), "bug_fix");
+        assert_eq!(CommitClass::Cleanup.to_string(), "cleanup");
+        assert_eq!(CommitClass::FormattingOnly.to_string(), "formatting_only");
+        assert_eq!(CommitClass::Mixed.to_string(), "mixed");
+    }
+
+    #[test]
+    fn test_display_granularity_display_all() {
+        assert_eq!(DisplayGranularity::MicroCompact.to_string(), "micro_compact");
+        assert_eq!(DisplayGranularity::Standard.to_string(), "standard");
+        assert_eq!(DisplayGranularity::FullStructural.to_string(), "full_structural");
+    }
+
+    #[test]
+    fn test_blast_radius_report_serialization() {
+        let report = BlastRadiusReport {
+            modified_symbol: "login".to_string(),
+            file_path: "src/auth.rs".to_string(),
+            total_impacted_callers: 2,
+            severity: "HIGH".to_string(),
+            impacted_callers: vec![ImpactedCaller {
+                caller_symbol: "handler".to_string(),
+                caller_file: "src/api.rs".to_string(),
+                call_site_line: 42,
+                depth: 1,
+            }],
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        let de: BlastRadiusReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.modified_symbol, "login");
+        assert_eq!(de.total_impacted_callers, 2);
+    }
+
+    #[test]
+    fn test_contract_violation_serialization() {
+        let cv = ContractViolation {
+            file_path: "src/ptr.c".to_string(),
+            rule: "REMOVED_NULL_CHECK".to_string(),
+            message: "Null check removed".to_string(),
+            line: 10,
+            severity: "CRITICAL".to_string(),
+        };
+        let json = serde_json::to_string(&cv).unwrap();
+        let de: ContractViolation = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.rule, "REMOVED_NULL_CHECK");
+    }
+
+    #[test]
+    fn test_change_status_debug() {
+        assert_eq!(format!("{:?}", ChangeStatus::Added), "Added");
+        assert_eq!(format!("{:?}", ChangeStatus::Deleted), "Deleted");
+        assert_eq!(format!("{:?}", ChangeStatus::Modified), "Modified");
+        assert_eq!(format!("{:?}", ChangeStatus::Renamed), "Renamed");
+    }
+
+    #[test]
+    fn test_file_diff_empty() {
+        let fd = FileDiff {
+            file_path: "src/empty.rs".to_string(),
+            operations: vec![],
+            refactor_patterns: vec![],
+        };
+        assert!(fd.operations.is_empty());
+        assert!(fd.refactor_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_supported_language_display_variants() {
+        assert_eq!(SupportedLanguage::Rust.to_string(), "Rust");
+        assert_eq!(SupportedLanguage::Python.to_string(), "Python");
+        assert_eq!(SupportedLanguage::TypeScript.to_string(), "TypeScript");
+        assert_eq!(SupportedLanguage::C.to_string(), "C");
+        assert_eq!(SupportedLanguage::Cpp.to_string(), "C++");
     }
 }

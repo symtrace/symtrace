@@ -1,8 +1,10 @@
 pub mod ast_builder;
 pub mod ast_cache;
+pub mod call_graph;
 pub mod cli;
 pub mod commit_classification;
 pub mod config;
+pub mod data_flow;
 pub mod git_layer;
 pub mod incremental_parse;
 pub mod language;
@@ -13,6 +15,7 @@ pub mod pager;
 pub mod query_dsl;
 pub mod refactor_detection;
 pub mod semantic_similarity;
+pub mod semantic_type;
 pub mod symbol_tracking;
 pub mod tree_diff;
 pub mod tui;

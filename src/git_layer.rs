@@ -12,7 +12,7 @@ use crate::types::{ChangeStatus, FileChange};
 /// Prevents redundant repository opening (`Repository::open`) across worker threads
 /// during parallel blob extraction.
 pub struct SharedBlobReader {
-    repo_path: String,
+    pub repo_path: String,
 }
 
 impl SharedBlobReader {
@@ -45,6 +45,41 @@ impl SharedBlobReader {
             let repo = &cache_ref.as_ref().unwrap().1;
             read_blob_by_oid(repo, oid)
         })
+    }
+
+    /// Read raw blob byte slice by OID directly without string allocation.
+    pub fn read_blob_bytes(&self, oid: git2::Oid) -> Result<Option<Vec<u8>>> {
+        thread_local! {
+            static REPO_CACHE: std::cell::RefCell<Option<(String, Repository)>> = const { std::cell::RefCell::new(None) };
+        }
+
+        REPO_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+            let need_open = match cache_ref.as_ref() {
+                Some((path, _)) => path != &self.repo_path,
+                None => true,
+            };
+
+            if need_open {
+                let repo = Repository::open(&self.repo_path)
+                    .or_else(|_| Repository::discover(&self.repo_path))
+                    .with_context(|| format!("Failed to open repository at '{}'", self.repo_path))?;
+                *cache_ref = Some((self.repo_path.clone(), repo));
+            }
+
+            let repo = &cache_ref.as_ref().unwrap().1;
+            read_blob_bytes_by_oid(repo, oid)
+        })
+    }
+}
+
+/// Read raw blob byte slice by its OID.
+fn read_blob_bytes_by_oid(repo: &Repository, oid: git2::Oid) -> Result<Option<Vec<u8>>> {
+    let blob = repo.find_blob(oid).context("Failed to find blob")?;
+    if blob.is_binary() {
+        Ok(None)
+    } else {
+        Ok(Some(blob.content().to_vec()))
     }
 }
 
@@ -222,9 +257,26 @@ fn read_blob_by_oid(repo: &Repository, oid: git2::Oid) -> Result<Option<String>>
 
     match std::str::from_utf8(blob.content()) {
         Ok(s) => Ok(Some(s.to_string())),
-        Err(_) => {
-            // Binary file — skip
-            Ok(None)
+        Err(_) => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shared_blob_reader_new() {
+        let reader = SharedBlobReader::new(".");
+        assert_eq!(reader.repo_path, ".");
+    }
+
+    #[test]
+    fn test_resolve_commit_nonexistent_reference() {
+        let repo_res = Repository::open(".");
+        if let Ok(repo) = repo_res {
+            let res = resolve_commit(&repo, "non_existent_commit_hash_12345");
+            assert!(res.is_err());
         }
     }
 }

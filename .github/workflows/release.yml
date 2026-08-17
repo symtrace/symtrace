@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build & Package Binaries
+    name: Build & Package (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -77,7 +77,7 @@ jobs:
             symtrace.exe
 
   release:
-    name: Immutable GitHub Release & Verification
+    name: Immutable GitHub Release, SBOM & Attestation
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -90,6 +90,13 @@ jobs:
           path: ./release-assets
           merge-multiple: true
 
+      - name: Generate SPDX Software Bill of Materials (SBOM)
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: ./release-assets/symtrace.spdx.json
+
       - name: Generate SHA256 Checksums
         run: |
           cd ./release-assets
@@ -101,10 +108,17 @@ jobs:
         with:
           subject-path: './release-assets/*'
 
-      - name: Create Clean GitHub Release
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v1
+        with:
+          subject-path: './release-assets/symtrace-*.tar.gz, ./release-assets/symtrace-*.zip, ./release-assets/symtrace.exe'
+          sbom-path: './release-assets/symtrace.spdx.json'
+
+      - name: Publish Immutable GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: ./release-assets/*
           generate_release_notes: true
           draft: false
           prerelease: false
+

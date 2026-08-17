@@ -68,18 +68,28 @@ pub fn compute_similarity(old: &AstNode, new: &AstNode) -> SimilarityScore {
     }
 }
 
+use std::collections::{HashMap, VecDeque};
+
 /// Compute a positional sequence displacement penalty when leaf tokens/parameters are permuted.
+/// Uses FIFO queues per token to ensure O(N) linear time and avoid duplicate token positional distortion.
 pub fn compute_positional_penalty(old: &AstNode, new: &AstNode) -> f64 {
-    let tokens_a = node_identity::collect_normalised_tokens(old);
-    let tokens_b = node_identity::collect_normalised_tokens(new);
+    let tokens_a = node_identity::collect_leaf_tokens(old);
+    let tokens_b = node_identity::collect_leaf_tokens(new);
     if tokens_a.is_empty() || tokens_b.is_empty() || tokens_a.len() != tokens_b.len() {
         return 0.0;
     }
 
+    let mut b_indices: HashMap<&str, VecDeque<usize>> = HashMap::new();
+    for (j, t_b) in tokens_b.iter().enumerate() {
+        b_indices.entry(t_b.as_str()).or_default().push_back(j);
+    }
+
     let mut total_disp = 0usize;
     for (i, t_a) in tokens_a.iter().enumerate() {
-        if let Some(j) = tokens_b.iter().position(|t_b| t_b == t_a) {
-            total_disp += (i as isize - j as isize).unsigned_abs();
+        if let Some(queue) = b_indices.get_mut(t_a.as_str()) {
+            if let Some(j) = queue.pop_front() {
+                total_disp += (i as isize - j as isize).unsigned_abs();
+            }
         }
     }
     let max_disp = tokens_a.len() * tokens_a.len();
@@ -262,7 +272,87 @@ mod tests {
     #[test]
     fn intensity_classification() {
         assert_eq!(classify_intensity(90.0), ChangeIntensity::Low);
+        assert_eq!(classify_intensity(80.0), ChangeIntensity::Low);
         assert_eq!(classify_intensity(65.0), ChangeIntensity::Medium);
+        assert_eq!(classify_intensity(50.0), ChangeIntensity::Medium);
         assert_eq!(classify_intensity(30.0), ChangeIntensity::High);
+    }
+
+    #[test]
+    fn test_compute_positional_penalty_empty_ast() {
+        let dummy = AstNode {
+            id: 0,
+            kind: "empty".to_string(),
+            start_byte: 0,
+            end_byte: 0,
+            start_row: 0,
+            start_col: 0,
+            end_row: 0,
+            end_col: 0,
+            text: String::new(),
+            structural_hash: [0u8; 32],
+            content_hash: [0u8; 32],
+            context_hash: [0u8; 32],
+            identity_hash: [0u8; 32],
+            children: vec![],
+            is_named: false,
+        };
+        assert_eq!(compute_positional_penalty(&dummy, &dummy), 0.0);
+    }
+
+    #[test]
+    fn test_compute_positional_penalty_reversed_tokens() {
+        let a = parse("fn test() { let a = 1; let b = 2; }", SupportedLanguage::Rust);
+        let b = parse("fn test() { let b = 2; let a = 1; }", SupportedLanguage::Rust);
+        let penalty = compute_positional_penalty(&a, &b);
+        assert!(penalty > 0.0);
+    }
+
+    #[test]
+    fn test_cyclomatic_complexity_for_loop() {
+        let a = parse("fn f() { let x = 1; }", SupportedLanguage::Rust);
+        let b = parse("fn f() { for i in 0..10 { println!(\"{}\", i); } }", SupportedLanguage::Rust);
+        let score = compute_similarity(&a, &b);
+        assert!(score.control_flow_changed);
+        assert!(score.cyclomatic_delta > 0);
+    }
+
+    #[test]
+    fn test_cyclomatic_complexity_while_loop() {
+        let a = parse("fn f() { let x = 1; }", SupportedLanguage::Rust);
+        let b = parse("fn f() { while true { break; } }", SupportedLanguage::Rust);
+        let score = compute_similarity(&a, &b);
+        assert!(score.control_flow_changed);
+    }
+
+    #[test]
+    fn test_cyclomatic_complexity_match_arms() {
+        let a = parse("fn f() { let x = 1; }", SupportedLanguage::Rust);
+        let b = parse("fn f(x: i32) { match x { 1 => (), 2 => (), _ => () } }", SupportedLanguage::Rust);
+        let score = compute_similarity(&a, &b);
+        assert!(score.control_flow_changed);
+        assert!(score.cyclomatic_delta >= 2);
+    }
+
+    #[test]
+    fn test_change_intensity_display() {
+        assert_eq!(ChangeIntensity::Low.to_string(), "low");
+        assert_eq!(ChangeIntensity::Medium.to_string(), "medium");
+        assert_eq!(ChangeIntensity::High.to_string(), "high");
+    }
+
+    #[test]
+    fn test_count_nodes_nested() {
+        let ast = parse("fn test() { let a = 1 + 2; }", SupportedLanguage::Rust);
+        let count = count_nodes(&ast);
+        assert!(count >= 5);
+    }
+
+    #[test]
+    fn test_similarity_score_clamping() {
+        let a = parse("fn a() {}", SupportedLanguage::Rust);
+        let b = parse("fn b() {}", SupportedLanguage::Rust);
+        let score = compute_similarity(&a, &b);
+        assert!((0.0..=100.0).contains(&score.similarity_percent));
     }
 }

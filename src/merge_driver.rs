@@ -63,7 +63,15 @@ pub fn run_merge_driver(
             } else if ops_theirs.is_empty() {
                 fs::write(ours_path, &ours_content)?;
                 return Ok(0);
-            } else if let Some(merged_code) = combine_disjoint_ast_sources(&ours_content, &theirs_content, &ops_ours, &ops_theirs) {
+            } else if let Some(merged_code) = combine_disjoint_ast_sources(
+                &ours_content,
+                &theirs_content,
+                ours_ast.as_ref(),
+                theirs_ast.as_ref(),
+                &ops_theirs,
+                l,
+                &limits,
+            ) {
                 fs::write(ours_path, merged_code)?;
                 return Ok(0);
             }
@@ -88,24 +96,131 @@ pub fn run_merge_driver(
     Ok(1) // Conflict status code
 }
 
-/// Combine non-overlapping AST modifications from ours and theirs cleanly into a single source.
+/// Recursively find a named entity node by its AST kind and identifier name.
+fn find_named_entity<'a>(node: &'a crate::types::AstNode, kind: &str, name: &str) -> Option<&'a crate::types::AstNode> {
+    if node.kind == kind && tree_diff::extract_name(node) == name {
+        return Some(node);
+    }
+    for child in &node.children {
+        if let Some(found) = find_named_entity(child, kind, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Recursively verify whether the AST contains any Tree-Sitter error or missing nodes.
+fn has_ast_errors(node: &crate::types::AstNode) -> bool {
+    if node.kind == "ERROR" || node.kind == "MISSING" || node.kind.contains("error") {
+        return true;
+    }
+    node.children.iter().any(has_ast_errors)
+}
+
+/// Extract (kind, name) from operation details formatted as `<kind> '<name>' ...`.
+fn parse_op_details(details: &str) -> Option<(&str, &str)> {
+    let mut parts = details.splitn(2, '\'');
+    let kind = parts.next()?.trim();
+    let rest = parts.next()?;
+    let name = rest.split('\'').next()?;
+    Some((kind, name))
+}
+
+struct TextReplacement {
+    start_byte: usize,
+    end_byte: usize,
+    new_text: String,
+}
+
+/// Combine non-overlapping AST modifications from ours and theirs using AST scope splicing
+/// and validate the candidate merge with Tree-sitter re-parsing.
 fn combine_disjoint_ast_sources(
     ours_src: &str,
     theirs_src: &str,
-    _ops_ours: &[OperationRecord],
-    _ops_theirs: &[OperationRecord],
+    ours_ast: Option<&crate::types::AstNode>,
+    theirs_ast: Option<&crate::types::AstNode>,
+    ops_theirs: &[OperationRecord],
+    lang: crate::types::SupportedLanguage,
+    limits: &ParserLimits,
 ) -> Option<String> {
-    let mut merged = ours_src.to_string();
-    if !merged.ends_with('\n') {
-        merged.push('\n');
-    }
-    // Append non-conflicting additions or modifications from theirs
-    for line in theirs_src.lines() {
-        if !ours_src.contains(line) {
-            merged.push_str(line);
-            merged.push('\n');
+    let ours_root = ours_ast?;
+    let theirs_root = theirs_ast?;
+
+    let mut replacements: Vec<TextReplacement> = Vec::new();
+
+    for op in ops_theirs {
+        match op.op_type {
+            crate::types::OperationType::Modify => {
+                if let Some((kind, name)) = parse_op_details(&op.details) {
+                    if let (Some(n_ours), Some(n_theirs)) = (
+                        find_named_entity(ours_root, kind, name),
+                        find_named_entity(theirs_root, kind, name),
+                    ) {
+                        if n_theirs.end_byte <= theirs_src.len() && n_ours.end_byte <= ours_src.len() {
+                            let theirs_slice = &theirs_src[n_theirs.start_byte..n_theirs.end_byte];
+                            replacements.push(TextReplacement {
+                                start_byte: n_ours.start_byte,
+                                end_byte: n_ours.end_byte,
+                                new_text: theirs_slice.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            crate::types::OperationType::Delete => {
+                if let Some((kind, name)) = parse_op_details(&op.details) {
+                    if let Some(n_ours) = find_named_entity(ours_root, kind, name) {
+                        if n_ours.end_byte <= ours_src.len() {
+                            replacements.push(TextReplacement {
+                                start_byte: n_ours.start_byte,
+                                end_byte: n_ours.end_byte,
+                                new_text: String::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            crate::types::OperationType::Insert => {
+                if let Some((kind, name)) = parse_op_details(&op.details) {
+                    if let Some(n_theirs) = find_named_entity(theirs_root, kind, name) {
+                        if n_theirs.end_byte <= theirs_src.len() {
+                            let theirs_slice = &theirs_src[n_theirs.start_byte..n_theirs.end_byte];
+                            let insertion_point = ours_src.len();
+                            replacements.push(TextReplacement {
+                                start_byte: insertion_point,
+                                end_byte: insertion_point,
+                                new_text: format!("\n{}", theirs_slice),
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
+
+    if replacements.is_empty() {
+        return None;
+    }
+
+    // Sort replacements in descending order of start_byte so byte offsets remain stable
+    replacements.sort_by(|a, b| b.start_byte.cmp(&a.start_byte));
+
+    let mut merged = ours_src.to_string();
+    for repl in replacements {
+        if repl.start_byte <= merged.len() && repl.end_byte <= merged.len() && repl.start_byte <= repl.end_byte {
+            merged.replace_range(repl.start_byte..repl.end_byte, &repl.new_text);
+        } else {
+            return None;
+        }
+    }
+
+    // Tree-sitter Validation Re-parse
+    let candidate_ast = ast_builder::parse_content(&merged, lang, false, limits).ok()?;
+    if has_ast_errors(&candidate_ast) {
+        return None;
+    }
+
     Some(merged)
 }
 

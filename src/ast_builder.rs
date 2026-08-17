@@ -123,6 +123,18 @@ pub fn parse_content(
     Ok(ast)
 }
 
+/// Zero-Copy Parse: parse raw byte slice directly into an AstNode.
+pub fn parse_bytes(
+    source_bytes: &[u8],
+    lang: SupportedLanguage,
+    logic_only: bool,
+    limits: &ParserLimits,
+) -> Result<AstNode> {
+    let source_str = std::str::from_utf8(source_bytes)
+        .context("Failed to parse bytes as valid UTF-8 source")?;
+    parse_content(source_str, lang, logic_only, limits)
+}
+
 /// Parse source code and return both the AST and the tree-sitter Tree.
 ///
 /// The returned Tree can be cached and later passed to
@@ -323,35 +335,70 @@ fn build_arena_ast_node<'a>(
     // Allocate kind string in arena (bump alloc = pointer increment)
     let kind = bump.alloc_str(node.kind());
 
-    // Only store text for leaf nodes (no named children) to save memory
-    let text = if node.named_child_count() == 0 {
+    // Pre-allocate children vec with known capacity in arena
+    let total_child_count = node.child_count();
+    let mut children = BumpVec::with_capacity_in(total_child_count, bump);
+
+    for i in 0..total_child_count {
+        if let Some(child) = node.child(i) {
+            if child.is_named() {
+                // In logic-only mode, skip comment and whitespace nodes
+                if logic_only && is_comment_or_whitespace(child.kind()) {
+                    continue;
+                }
+                children.push(build_arena_ast_node(
+                    bump,
+                    child,
+                    source,
+                    logic_only,
+                    id_counter,
+                    limits,
+                    depth + 1,
+                )?);
+            } else if is_significant_operator(child.kind()) {
+                // Anonymous operator token: emit as leaf node
+                if (*id_counter as usize) >= limits.max_ast_nodes {
+                    anyhow::bail!(
+                        "AST node count exceeds limit of {} — skipping file",
+                        limits.max_ast_nodes
+                    );
+                }
+                let op_id = *id_counter;
+                *id_counter += 1;
+                let op_kind: &str = bump.alloc_str(child.kind());
+                let op_text: &str = if let Ok(raw) = child.utf8_text(source.as_bytes()) {
+                    bump.alloc_str(raw)
+                } else {
+                    op_kind
+                };
+                let op_start_row = child.start_position().row;
+                let op_start_col = child.start_position().column;
+                let op_end_row = child.end_position().row;
+                let op_end_col = child.end_position().column;
+                children.push(ArenaAstNode {
+                    id: op_id,
+                    kind: op_kind,
+                    start_byte: child.start_byte(),
+                    end_byte: child.end_byte(),
+                    start_row: op_start_row,
+                    start_col: op_start_col,
+                    end_row: op_end_row,
+                    end_col: op_end_col,
+                    text: op_text,
+                    children: BumpVec::new_in(bump),
+                    is_named: false,
+                });
+            }
+        }
+    }
+
+    // Only store text for leaf nodes (no children) to save memory
+    let text = if children.is_empty() {
         let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
         bump.alloc_str(raw)
     } else {
         "" // No allocation needed for interior nodes
     };
-
-    // Pre-allocate children vec with known capacity in arena
-    let child_count = node.named_child_count();
-    let mut children = BumpVec::with_capacity_in(child_count, bump);
-
-    for i in 0..child_count {
-        if let Some(child) = node.named_child(i) {
-            // In logic-only mode, skip comment and whitespace nodes
-            if logic_only && is_comment_or_whitespace(child.kind()) {
-                continue;
-            }
-            children.push(build_arena_ast_node(
-                bump,
-                child,
-                source,
-                logic_only,
-                id_counter,
-                limits,
-                depth + 1,
-            )?);
-        }
-    }
 
     let start_row = node.start_position().row;
     let start_col = node.start_position().column;
@@ -376,6 +423,34 @@ fn build_arena_ast_node<'a>(
         children,
         is_named: node.is_named(),
     })
+}
+
+/// Convert a byte offset within a UTF-8 string line into a 0-indexed character/codepoint offset.
+/// Prevents highlight column drift when source files contain multibyte Unicode characters (emojis, CJK, accented chars).
+pub fn byte_to_char_col(line: &str, byte_offset: usize) -> usize {
+    if byte_offset == 0 {
+        return 0;
+    }
+    let clamped_bytes = byte_offset.min(line.len());
+    // Safe boundary search: find closest char boundary
+    let mut safe_idx = clamped_bytes;
+    while safe_idx > 0 && !line.is_char_boundary(safe_idx) {
+        safe_idx -= 1;
+    }
+    line[..safe_idx].chars().count()
+}
+
+#[inline]
+fn is_significant_operator(kind: &str) -> bool {
+    matches!(
+        kind,
+        "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
+            | "==" | "!=" | "<" | "<=" | ">" | ">="
+            | "->" | "=>"
+            | "mut" | "async" | "yield"
+            | "&&" | "||" | "!" | "~"
+            | "+" | "-" | "*" | "/" | "%"
+    )
 }
 
 /// Check if a node kind represents a comment or pure whitespace.
@@ -968,8 +1043,101 @@ mod tests {
 
     #[test]
     fn parse_json_code() {
-        let src = "{\n  \"name\": \"symtrace\",\n  \"version\": \"0.3.0\",\n  \"active\": true\n}";
+        let src = "{\n  \"name\": \"symtrace\",\n  \"version\": \"0.5.0\"\n}";
         let ast = parse(src, SupportedLanguage::Json);
         assert!(!ast.children.is_empty());
+    }
+
+    #[test]
+    fn test_byte_to_char_col_edge_cases() {
+        assert_eq!(byte_to_char_col("", 0), 0);
+        assert_eq!(byte_to_char_col("", 10), 0);
+        assert_eq!(byte_to_char_col("hello", 0), 0);
+        assert_eq!(byte_to_char_col("hello", 3), 3);
+        assert_eq!(byte_to_char_col("hello", 100), 5);
+    }
+
+    #[test]
+    fn test_byte_to_char_col_cjk_and_emojis() {
+        let cjk = "你好世界"; // 4 chars, 12 bytes
+        assert_eq!(byte_to_char_col(cjk, 3), 1);
+        assert_eq!(byte_to_char_col(cjk, 6), 2);
+        assert_eq!(byte_to_char_col(cjk, 12), 4);
+
+        let emoji = "🦀 Rust";
+        assert_eq!(byte_to_char_col(emoji, 4), 1);
+        assert_eq!(byte_to_char_col(emoji, 5), 2);
+    }
+
+    #[test]
+    fn test_byte_to_char_col_mid_multibyte_safety() {
+        let emoji = "🚀"; // 4 bytes
+        // byte 2 is mid-character
+        let col = byte_to_char_col(emoji, 2);
+        assert_eq!(col, 0); // clamped to char boundary at byte 0
+    }
+
+    #[test]
+    fn test_parse_bytes_zero_copy_rust() {
+        let bytes = b"pub fn zero_copy() -> bool { true }";
+        let ast = super::parse_bytes(bytes, SupportedLanguage::Rust, false, &ParserLimits::default()).unwrap();
+        assert!(!ast.children.is_empty());
+        assert_eq!(ast.kind, "source_file");
+    }
+
+    #[test]
+    fn test_parse_content_limits_max_file_size_exceeded() {
+        let limits = ParserLimits {
+            max_file_size_bytes: 10,
+            max_ast_nodes: 100,
+            max_recursion_depth: 64,
+            parse_timeout_ms: 100,
+        };
+        let res = super::parse_content("pub fn oversized_function() {}", SupportedLanguage::Rust, false, &limits);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_is_significant_operator_tokens() {
+        assert!(super::is_significant_operator("+="));
+        assert!(super::is_significant_operator("-="));
+        assert!(super::is_significant_operator("=="));
+        assert!(super::is_significant_operator("!="));
+        assert!(super::is_significant_operator("->"));
+        assert!(super::is_significant_operator("mut"));
+        assert!(super::is_significant_operator("async"));
+        assert!(super::is_significant_operator("&&"));
+        assert!(super::is_significant_operator("||"));
+        assert!(!super::is_significant_operator("some_identifier"));
+    }
+
+    #[test]
+    fn test_parse_bytes_python() {
+        let bytes = b"def calculate(a, b):\n    return a + b\n";
+        let ast = super::parse_bytes(bytes, SupportedLanguage::Python, false, &ParserLimits::default()).unwrap();
+        assert!(!ast.children.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bytes_javascript() {
+        let bytes = b"const add = (x, y) => x + y;";
+        let ast = super::parse_bytes(bytes, SupportedLanguage::JavaScript, false, &ParserLimits::default()).unwrap();
+        assert!(!ast.children.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bytes_go() {
+        let bytes = b"package main\nfunc Add(a, b int) int { return a + b }";
+        let ast = super::parse_bytes(bytes, SupportedLanguage::Go, false, &ParserLimits::default()).unwrap();
+        assert!(!ast.children.is_empty());
+    }
+
+    #[test]
+    fn test_parse_content_incremental_zero_changes() {
+        let src = "fn unchanged() -> bool { true }";
+        let (ast, tree) = super::parse_content_with_tree(src, SupportedLanguage::Rust, false, &ParserLimits::default()).unwrap();
+        let (inc_ast, _, count) = super::parse_content_incremental(src, src, &tree, &ast, SupportedLanguage::Rust, false, &ParserLimits::default()).unwrap();
+        assert_eq!(ast.content_hash, inc_ast.content_hash);
+        assert!(count > 0);
     }
 }

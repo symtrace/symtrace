@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/JashT14/symtrace/main/vscode-symtrace/media/symtrace-banner.jpg" alt="symtrace banner" width="700">
+  <img src="https://raw.githubusercontent.com/symtrace/symtrace/main/vscode-symtrace/media/symtrace-banner.jpg" alt="symtrace banner" width="700">
 </p>
 
-# Symtrace for VS Code (v0.4.5)
+# symtrace for VS Code (v0.5.0)
 
 Semantic diff viewer powered by AST analysis. Compare Git commits to see **what semantically changed** - functions moved, renamed, modified, inserted, or deleted - rather than just which lines changed.
 
-Built on the [symtrace](https://github.com/JashT14/symtrace) CLI engine (Rust).
+Built on the [symtrace](https://github.com/symtrace/symtrace) CLI engine (Rust).
 
 > [!WARNING]
 > **Active Development & Work in Progress Notice:**
@@ -24,9 +24,9 @@ Built on the [symtrace](https://github.com/JashT14/symtrace) CLI engine (Rust).
 - **Logic-only Mode** - Ignore comment and whitespace changes with `--logic-only`
 - **White-Mode Signed HTML Report** - View full visual reports with embedded BLAKE3 digital verification signatures and PDF export support
 - **Performance Metrics** - View parse time, diff time, and node counts in the sidebar
-- **Activity Bar Integration** - Dedicated Symtrace panel in the VS Code sidebar with SVG icon
+- **Activity Bar Integration** - Dedicated symtrace panel in the VS Code sidebar with SVG icon
 - **Git Commit Picker** - Interactive QuickPick UI for selecting commits from your git history
-- **Auto-download Binary** - 4-tier binary resolution with automatic GitHub releases download (`v0.4.5`)
+- **Auto-download Binary** - 4-tier binary resolution with automatic GitHub releases download (`v0.5.0`)
 - **Cancellable Analysis** - Progress notification with cancellation support during analysis
 
 ## Supported Languages
@@ -50,7 +50,7 @@ Built on the [symtrace](https://github.com/JashT14/symtrace) CLI engine (Rust).
 
 1. Install the extension from the VS Code Marketplace
 2. Open a Git repository in VS Code
-3. Click the **Symtrace** icon in the Activity Bar (left sidebar)
+3. Click the **symtrace** icon in the Activity Bar (left sidebar)
 4. Click **"Compare Two Commits"** or **"Compare Commit with Parent"** in the welcome view
 5. Select commits from the picker
 6. View results:
@@ -68,7 +68,7 @@ The `symtrace` CLI binary is required. The extension resolves it using a 4-tier 
 | 1 | Config path | Explicit path from `symtrace.binaryPath` setting |
 | 2 | System PATH | `symtrace` found via `which`/`where` |
 | 3 | Cached download | Previously downloaded binary in extension storage |
-| 4 | GitHub releases | Auto-download from `JashT14/symtrace` releases (prompted) |
+| 4 | GitHub releases | Auto-download from `symtrace/symtrace` releases (prompted) |
 
 You can also install manually:
 
@@ -105,15 +105,15 @@ Auto-download supports the following targets:
 
 | Command | Description |
 | :--- | :--- |
-| `Symtrace: Compare Two Commits` | Select two commits to compare semantically |
-| `Symtrace: Compare Commit with Its Parent` | Compare a single commit against its parent |
-| `Symtrace: Show Operation Diff` | Open side-by-side diff for a specific operation |
-| `Symtrace: Refresh` | Refresh the results tree view |
-| `Symtrace: Clear Results` | Clear all results, decorations, and diff panels |
+| `symtrace: Compare Two Commits` | Select two commits to compare semantically |
+| `symtrace: Compare Commit with Its Parent` | Compare a single commit against its parent |
+| `symtrace: Show Operation Diff` | Open side-by-side diff for a specific operation |
+| `symtrace: Refresh` | Refresh the results tree view |
+| `symtrace: Clear Results` | Clear all results, decorations, and diff panels |
 
 ## How It Works
 
-Symtrace uses **tree-sitter** to parse source files into ASTs, then applies a **5-phase matching algorithm** with **BLAKE3 hashing** to identify semantic changes:
+symtrace uses **tree-sitter** to parse source files into ASTs, then applies a **5-phase matching algorithm** with **BLAKE3 hashing** to identify semantic changes:
 
 1. **Exact hash match** - Identical subtrees (move detection)
 2. **Structural match** - Same shape, different content (renames/modifications)
@@ -126,10 +126,10 @@ This produces deterministic, meaningful diffs that understand code structure rat
 ### Architecture
 
 ```
-VS Code Extension (v0.4.5)
+VS Code Extension (v0.5.0)
        │
        ├── extension.ts         ← Activation, command registration
-       ├── binary.ts            ← 4-tier binary resolution + GitHub auto-download (v0.4.5)
+       ├── binary.ts            ← 4-tier binary resolution + GitHub auto-download (v0.5.0)
        ├── runner.ts            ← Spawns symtrace CLI, parses JSON output
        ├── config.ts            ← Reads VS Code settings → CLI flags
        ├── commitPicker.ts      ← Git log QuickPick UI (two commits / with parent)
@@ -144,9 +144,15 @@ VS Code Extension (v0.4.5)
 
 ## Release Notes
 
+### 0.5.0
+
+- Aligned extension binary downloader with `v0.5.0` GitHub releases (`symtrace/symtrace`)
+- Full support for adaptive granularity, call graph blast radius reporting, and contract violation warnings
+- Added TypeScript types for `DisplayGranularity`, `BlastRadiusReport`, and `ContractViolation`
+
 ### 0.4.5
 
-- Aligned extension binary downloader with `v0.4.5` GitHub releases (`JashT14/symtrace`)
+- Aligned extension binary downloader with `v0.4.5` GitHub releases (`symtrace/symtrace`)
 - Full compatibility with multiset frequency Jaccard similarity and windowed AST diff schema
 
 ### 0.4.0
@@ -154,7 +160,7 @@ VS Code Extension (v0.4.5)
 - Expanded language support matrix to 13 languages & formats: added C#, Ruby, PHP, and Rust 2024
 - Updated Activity Bar icon integration to high-resolution SVG (`symtrace-new-icon.svg`)
 - Support for White-Mode HTML visual reports with BLAKE3 cryptographic report fingerprinting
-- Aligned extension binary downloader with `v0.4.0` GitHub releases (`JashT14/symtrace`)
+- Aligned extension binary downloader with `v0.4.0` GitHub releases (`symtrace/symtrace`)
 
 ### 0.3.0
 
@@ -162,7 +168,7 @@ VS Code Extension (v0.4.5)
 - Added `symtrace.pathGlob` configuration setting for path glob pattern filtering (`--path`)
 - Added `symtrace.color` configuration setting for terminal ANSI color controls (`--color`)
 - Updated welcome view and sidebar tree view to display full 9-language matrix
-- Aligned binary resolution and GitHub release download logic with v0.3.0 release assets (`JashT14/symtrace`)
+- Aligned binary resolution and GitHub release download logic with v0.3.0 release assets (`symtrace/symtrace`)
 
 ### 0.2.0
 

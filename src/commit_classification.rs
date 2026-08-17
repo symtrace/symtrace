@@ -47,6 +47,7 @@ pub fn classify_commit(
         return CommitClassification {
             primary_class: CommitClass::FormattingOnly,
             confidence_score: 1.0,
+            intent_labels: vec![],
         };
     }
 
@@ -81,6 +82,7 @@ pub fn classify_commit(
         return CommitClassification {
             primary_class: CommitClass::Cleanup,
             confidence_score: confidence,
+            intent_labels: vec![],
         };
     }
 
@@ -226,19 +228,55 @@ pub fn classify_commit(
     let (best_class, best_score) = scores[0].clone();
     let second_score = if scores.len() > 1 { scores[1].1 } else { 0.0 };
 
+    let intent_labels = extract_intent_labels(file_diffs);
+
     // If top two scores are very close, classify as Mixed
     let margin = best_score - second_score;
     if margin < 0.10 && best_score > 0.0 {
         CommitClassification {
             primary_class: CommitClass::Mixed,
             confidence_score: (best_score * 0.8).clamp(0.0, 1.0),
+            intent_labels,
         }
     } else {
         CommitClassification {
             primary_class: best_class,
             confidence_score: best_score.clamp(0.0, 1.0),
+            intent_labels,
         }
     }
+}
+
+fn extract_intent_labels(file_diffs: &[FileDiff]) -> Vec<String> {
+    let mut labels = Vec::new();
+
+    for fd in file_diffs {
+        for op in &fd.operations {
+            let details_lower = op.details.to_lowercase();
+            if details_lower.contains("guard") || details_lower.contains("null check") || details_lower.contains("bounds") {
+                if !labels.contains(&"GUARD_CLAUSE_ADDED".to_string()) {
+                    labels.push("GUARD_CLAUSE_ADDED".to_string());
+                }
+            }
+            if details_lower.contains("signature") || details_lower.contains("param") || details_lower.contains("return type") {
+                if !labels.contains(&"TYPE_SIGNATURE_CHANGED".to_string()) {
+                    labels.push("TYPE_SIGNATURE_CHANGED".to_string());
+                }
+            }
+            if let Some(ref sim) = op.similarity {
+                if sim.control_flow_changed && !labels.contains(&"CONTROL_FLOW_INVERTED".to_string()) {
+                    labels.push("CONTROL_FLOW_INVERTED".to_string());
+                }
+            }
+            if details_lower.contains("close") || details_lower.contains("drop") || details_lower.contains("cleanup") || details_lower.contains("free") {
+                if !labels.contains(&"RESOURCE_CLEANUP_ADDED".to_string()) {
+                    labels.push("RESOURCE_CLEANUP_ADDED".to_string());
+                }
+            }
+        }
+    }
+
+    labels
 }
 
 // ── Metric computation helpers ───────────────────────────────────────
@@ -356,6 +394,7 @@ mod tests {
             new_location: Some("L5".to_string()),
             details: details.to_string(),
             similarity,
+            is_logic_op: true,
         }
     }
 
@@ -571,10 +610,12 @@ mod tests {
         let c = CommitClassification {
             primary_class: CommitClass::Feature,
             confidence_score: 0.85,
+            intent_labels: vec!["TYPE_SIGNATURE_CHANGED".to_string()],
         };
         let json = serde_json::to_string(&c).unwrap();
         let decoded: CommitClassification = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.primary_class, CommitClass::Feature);
         assert!((decoded.confidence_score - 0.85).abs() < f64::EPSILON);
+        assert_eq!(decoded.intent_labels, vec!["TYPE_SIGNATURE_CHANGED"]);
     }
 }

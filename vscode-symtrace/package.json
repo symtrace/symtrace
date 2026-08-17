@@ -1,13 +1,13 @@
 {
   "name": "symtrace-vscode",
-  "displayName": "Symtrace for VS Code",
+  "displayName": "symtrace for VS Code",
   "description": "Semantic diff viewer powered by symtrace AST analysis",
-  "version": "0.4.5",
-  "publisher": "JashT14",
+  "version": "0.5.0",
+  "publisher": "symtrace",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/JashT14/symtrace"
+    "url": "https://github.com/symtrace/symtrace"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -25,34 +25,34 @@
     "commands": [
       {
         "command": "symtrace.compareTwoCommits",
-        "title": "Symtrace: Compare Two Commits",
+        "title": "symtrace: Compare Two Commits",
         "icon": "$(git-compare)"
       },
       {
         "command": "symtrace.compareWithParent",
-        "title": "Symtrace: Compare Commit with Its Parent",
+        "title": "symtrace: Compare Commit with Its Parent",
         "icon": "$(git-commit)"
       },
       {
         "command": "symtrace.refreshTreeView",
-        "title": "Symtrace: Refresh",
+        "title": "symtrace: Refresh",
         "icon": "$(refresh)"
       },
       {
         "command": "symtrace.clearResults",
-        "title": "Symtrace: Clear Results",
+        "title": "symtrace: Clear Results",
         "icon": "$(clear-all)"
       },
       {
         "command": "symtrace.showOperationDiff",
-        "title": "Symtrace: Show Operation Diff"
+        "title": "symtrace: Show Operation Diff"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "symtrace",
-          "title": "Symtrace",
+          "title": "symtrace",
           "icon": "media/symtrace-new-icon.svg"
         }
       ]
@@ -98,7 +98,7 @@
       ]
     },
     "configuration": {
-      "title": "Symtrace",
+      "title": "symtrace",
       "properties": {
         "symtrace.binaryPath": {
           "type": "string",

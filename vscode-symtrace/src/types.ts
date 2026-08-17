@@ -35,6 +35,8 @@ export interface OperationRecord {
   newLocation?: string;
   details: string;
   similarity?: SimilarityScore;
+  is_logic_op?: boolean;
+  isLogicOp?: boolean;
 }
 
 export interface RefactorPattern {
@@ -109,6 +111,39 @@ export interface PerformanceMetrics {
   nodesReused?: number;
 }
 
+export type DisplayGranularity = "micro_compact" | "standard" | "full_structural";
+
+export interface ImpactedCaller {
+  caller_symbol?: string;
+  callerSymbol?: string;
+  caller_file?: string;
+  callerFile?: string;
+  call_site_line?: number;
+  callSiteLine?: number;
+  depth?: number;
+}
+
+export interface BlastRadiusReport {
+  modified_symbol?: string;
+  modifiedSymbol?: string;
+  file_path?: string;
+  filePath?: string;
+  total_impacted_callers?: number;
+  totalImpactedCallers?: number;
+  impacted_callers?: ImpactedCaller[];
+  impactedCallers?: ImpactedCaller[];
+  severity?: string;
+}
+
+export interface ContractViolation {
+  file_path?: string;
+  filePath?: string;
+  rule: string;
+  message: string;
+  line: number;
+  severity: string;
+}
+
 export interface DiffOutput {
   repository: string;
   commit_a?: string;
@@ -122,9 +157,14 @@ export interface DiffOutput {
   commit_classification?: CommitClassification;
   commitClassification?: CommitClassification;
   performance: PerformanceMetrics;
+  granularity?: DisplayGranularity;
+  blast_radius?: BlastRadiusReport[];
+  blastRadius?: BlastRadiusReport[];
+  contract_violations?: ContractViolation[];
+  contractViolations?: ContractViolation[];
 }
 
-// Helper Accessors to handle both camelCase (CLI v0.4.5) and snake_case properties
+// Helper Accessors to handle both camelCase (CLI v0.5.0) and snake_case properties
 export function getFilePath(file: FileDiff): string {
   return file.filePath || file.file_path || "";
 }

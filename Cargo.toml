@@ -1,10 +1,10 @@
 [package]
 name = "symtrace"
-version = "0.4.5"
+version = "0.5.0"
 edition = "2021"
 description = "A deterministic semantic diff engine using AST-based structural analysis"
 license = "MIT"
-repository = "https://github.com/JashT14/symtrace"
+repository = "https://github.com/symtrace/symtrace"
 readme = "README.md"
 keywords = ["git", "diff", "ast", "semantic", "tree-sitter"]
 categories = ["command-line-utilities", "development-tools"]

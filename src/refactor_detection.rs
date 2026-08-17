@@ -190,7 +190,7 @@ fn is_function_entity(op: &OperationRecord) -> bool {
 
 /// Extract the name between single quotes in a detail string like
 /// `"function_item 'foo' inserted"`.
-fn extract_name_from_details(details: &str) -> Option<&str> {
+pub fn extract_name_from_details(details: &str) -> Option<&str> {
     let start = details.find('\'')?;
     let rest = &details[start + 1..];
     let end = rest.find('\'')?;
@@ -293,6 +293,7 @@ mod tests {
             new_location: Some("L5".to_string()),
             details: details.to_string(),
             similarity: None,
+            is_logic_op: true,
         }
     }
 
@@ -362,5 +363,39 @@ mod tests {
         let d = "function_item renamed from 'alpha' to 'beta'";
         assert_eq!(extract_old_name_from_rename(d), Some("alpha"));
         assert_eq!(extract_new_name_from_rename(d), Some("beta"));
+    }
+
+    #[test]
+    fn test_extract_old_name_malformed() {
+        assert_eq!(extract_old_name_from_rename("invalid string without quotes"), None);
+        assert_eq!(extract_new_name_from_rename("renamed from 'alpha'"), None);
+    }
+
+    #[test]
+    fn test_is_function_entity() {
+        let op_fn = make_op(OperationType::Insert, EntityType::Function, "func");
+        let op_var = make_op(OperationType::Insert, EntityType::Variable, "var");
+        assert!(is_function_entity(&op_fn));
+        assert!(!is_function_entity(&op_var));
+    }
+
+    #[test]
+    fn test_refactor_kind_display() {
+        assert_eq!(RefactorKind::ExtractMethod.to_string(), "extract_method");
+        assert_eq!(RefactorKind::MoveMethod.to_string(), "move_method");
+        assert_eq!(RefactorKind::RenameVariable.to_string(), "rename_variable");
+    }
+
+    #[test]
+    fn test_detect_extract_method_pattern() {
+        let ops = vec![
+            make_op(OperationType::Insert, EntityType::Function, "function_item 'helper' inserted"),
+            make_op(OperationType::Modify, EntityType::Function, "function_item 'main_logic' modified"),
+        ];
+        let a = parse("fn main_logic() { let x = 1; let y = 2; let z = x + y; }", SupportedLanguage::Rust);
+        let b = parse("fn main_logic() { helper(); } fn helper() { let x = 1; let y = 2; let z = x + y; }", SupportedLanguage::Rust);
+
+        let patterns = detect_patterns(&ops, Some(&a), Some(&b));
+        assert!(patterns.iter().any(|p| p.kind == RefactorKind::ExtractMethod));
     }
 }

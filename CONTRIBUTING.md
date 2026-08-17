@@ -1,13 +1,13 @@
-# Contributing to symtrace (v0.4.5)
+# Contributing to symtrace (v0.5.0)
 
 Thank you for your interest in contributing to `symtrace`.
 
 ## Getting Started
 
-1. Fork and clone the repository (`https://github.com/JashT14/symtrace`)
+1. Fork and clone the repository (`https://github.com/symtrace/symtrace`)
 2. Install [Rust](https://www.rust-lang.org/tools/install) (edition 2021+) and a C compiler (for libgit2 and tree-sitter C grammars)
 3. Run `cargo build` to verify your setup
-4. Run `cargo test --workspace` to ensure all 190 unit, property-based (`proptest`), and differential tests pass
+4. Run `cargo test --workspace` to ensure all 332 unit, property-based (`proptest`), and differential tests pass
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, and release configuration.
 
@@ -20,18 +20,19 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for build system details, build targets, an
 
 ```bash
 # Format + lint + full test suite + release build
-./build.sh production            # macOS/Linux
-.\build.ps1 -Target production   # Windows
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test --all
 ```
 
 ## Code & Security Standards
 
 - **Formatting** — all code must pass `cargo fmt --all -- --check`
 - **Strict Linting** — all clippy warnings are errors: `cargo clippy --all-targets --all-features -- -D warnings`
-- **Testing** — all 166 unit, property (`proptest`), and differential integration tests must pass (`cargo test --all`)
+- **Testing** — all 332 unit, property (`proptest`), and differential integration tests must pass (`cargo test --all`)
 - **Zero Unsafe Code** — `unsafe_code = "deny"` is enforced in `Cargo.toml`
 - **Pinned Dependencies** — new dependencies must use exact version pinning (`=x.y.z`)
-- **Language Support** — changes affecting AST parsing must verify compatibility across all 9 supported languages/formats (Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, and JSON)
+- **Language Support** — changes affecting AST parsing must verify compatibility across all 13 supported languages/formats (Rust, JavaScript, TypeScript, Python, Java, C, C++, Go, JSON, C#, Ruby, PHP, Rust 2024)
 
 ## Pull Requests
 

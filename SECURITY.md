@@ -1,6 +1,6 @@
-# `symtrace` Security Policy & Audit Report - v0.4.5
+# `symtrace` Security Policy & Audit Report - v0.5.0
 
-**Audit Date:** August 2026 (`v0.4.5` Release Audit)  
+**Audit Date:** August 2026 (`v0.5.0` Release Audit)  
 **Audit Scope:** Entire codebase (`src/*.rs`, `tests/`, `fuzz/`, `Cargo.toml`, `.github/workflows/release.yml`) - manual review, static analysis, property-based testing, and fuzzing evaluation.
 
 ## Executive Summary
@@ -16,11 +16,11 @@ It has **zero network capabilities**, collects **zero telemetry**, enforces **ze
 | **Unsafe Rust Code** | **Denied** - `#![deny(unsafe_code)]` enforced in `Cargo.toml` |
 | **Report Integrity** | **Cryptographic** - 64-character BLAKE3 digital fingerprint signing for HTML/PDF reports |
 | **Audit Liability** | **Guarded** - includes explicit AST heuristic accuracy disclaimer notice |
-| **Cache Security** | **Bounded & Keyed** - 20 MiB limit, versioned envelope, BLAKE3 blob OID + `limits_hash` key |
+| **Cache Security** | **Two-Tier CAS** - Content-Addressed `DiffCacheKey` (`old_blob_oid || new_blob_oid || limits_hash`), 20 MiB bounded LRU partitions |
 | **Parser Guardrails** | **Guarded & Fuzzed** - bounds on file size, node count, depth, timeout; fuzzed via `cargo-fuzz` |
 | **Oversized File DoS** | **Subtree Windowed** - files >1 MiB windowed to modified line hunks ($O(\text{hunk\_size})$ complexity) |
-| **3-Way Merge Security** | **Atomic Write** - validates path parameters and writes output atomically |
-| **Property Testing** | **Verified** - `proptest` suite asserts diff symmetry, determinism, and hash invariants (186 passing tests) |
+| **3-Way Merge Security** | **AST Splicing & Re-parse Validation** - validates path parameters and writes output atomically with tree-sitter error checks |
+| **Property Testing** | **Verified** - `proptest` suite asserts diff symmetry, determinism, and hash invariants (332 passing tests) |
 | **Supply Chain Provenance** | **Automated** - Keyless Cosign OIDC signing, SPDX SBOM (`symtrace.spdx.json`), GitHub Artifact Attestations |
 
 ## 1. Ethical Data Processing

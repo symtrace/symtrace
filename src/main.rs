@@ -1,8 +1,10 @@
 mod ast_builder;
 mod ast_cache;
+mod call_graph;
 mod cli;
 mod commit_classification;
 mod config;
+mod data_flow;
 mod git_layer;
 mod incremental_parse;
 mod language;
@@ -13,6 +15,7 @@ mod pager;
 mod query_dsl;
 mod refactor_detection;
 mod semantic_similarity;
+mod semantic_type;
 mod symbol_tracking;
 mod tree_diff;
 mod tui;
@@ -34,7 +37,7 @@ use types::*;
 fn main() -> Result<()> {
     let args = cli::Args::parse();
 
-    // ── 0. Check for subcommands (git-diff-driver mode) ───────────────
+    // ── 0. Check for subcommands (git-diff-driver / merge-driver / lint) ────────
     match &args.command {
         Some(cli::Commands::GitDiffDriver {
             path,
@@ -55,6 +58,14 @@ fn main() -> Result<()> {
         }) => {
             let code = merge_driver::run_merge_driver(base_file, ours_file, theirs_file, display_path)?;
             std::process::exit(code);
+        }
+        Some(cli::Commands::Lint {
+            path,
+            queries_dir,
+            max_warnings,
+            format,
+        }) => {
+            return run_lint(path, queries_dir.as_deref(), *max_warnings, format);
         }
         _ => {}
     }
@@ -199,6 +210,7 @@ fn main() -> Result<()> {
                     true,
                     0u64,
                     false,
+                    None,
                 );
             }
 
@@ -277,6 +289,16 @@ fn main() -> Result<()> {
                 }
             };
 
+            let diff_cache_key = match (&file_change.old_blob_hash, &file_change.new_blob_hash) {
+                (Some(old_h), Some(new_h)) => Some(ast_cache::DiffCacheKey::new(
+                    old_h,
+                    new_h,
+                    logic_only,
+                    limits.compute_limits_hash(),
+                )),
+                _ => None,
+            };
+
             (
                 file_change.path.clone(),
                 ast_a,
@@ -285,18 +307,20 @@ fn main() -> Result<()> {
                 false,
                 nodes_reused,
                 was_incremental,
+                diff_cache_key,
             )
         })
         .collect();
 
     let mut parsed_pairs: Vec<(String, Option<AstNode>, Option<AstNode>)> = Vec::new();
+    let mut diff_tasks: Vec<(String, Option<AstNode>, Option<AstNode>, Option<ast_cache::DiffCacheKey>)> = Vec::new();
     let mut total_nodes: u64 = 0;
     let mut files_processed: usize = 0;
     let mut files_skipped_blob: usize = 0;
     let mut total_nodes_reused: u64 = 0;
     let mut total_incremental_parses: usize = 0;
 
-    for (path, ast_a, ast_b, nodes, skipped, reused, was_inc) in parsed_results {
+    for (path, ast_a, ast_b, nodes, skipped, reused, was_inc, cache_key) in parsed_results {
         if skipped {
             files_skipped_blob += 1;
             continue;
@@ -307,52 +331,101 @@ fn main() -> Result<()> {
             total_incremental_parses += 1;
         }
         files_processed += 1;
-        parsed_pairs.push((path, ast_a, ast_b));
+        parsed_pairs.push((path.clone(), ast_a.clone(), ast_b.clone()));
+        diff_tasks.push((path, ast_a, ast_b, cache_key));
     }
     let parse_time = parse_start.elapsed();
 
-    // ── 3. Compute semantic diff per file (parallel) ─────────────────
+    // ── 3. Compute semantic diff per file (parallel with CAS caching) ──
     let diff_start = Instant::now();
 
-    let mut file_diffs: Vec<FileDiff> = parsed_pairs
+    let mut file_diffs: Vec<FileDiff> = diff_tasks
         .par_iter()
-        .map(|(path, ast_a, ast_b)| {
+        .map(|(path, ast_a, ast_b, cache_key)| {
+            if let Some(ref key) = cache_key {
+                if let Some(cached_diff) = cache.get_diff(key) {
+                    return cached_diff;
+                }
+            }
+
             let operations = tree_diff::compute_diff(ast_a.as_ref(), ast_b.as_ref(), logic_only);
             let refactor_patterns =
                 refactor_detection::detect_patterns(&operations, ast_a.as_ref(), ast_b.as_ref());
 
-            FileDiff {
+            let diff = FileDiff {
                 file_path: path.clone(),
                 operations,
                 refactor_patterns,
+            };
+
+            if let Some(ref key) = cache_key {
+                cache.put_diff(key, diff.clone());
             }
+
+            diff
         })
         .collect();
 
     let diff_time = diff_start.elapsed();
 
-    // ── 4. Cross-file symbol tracking ─────────────────────────────────
+    // ── 4. Cross-file symbol tracking, Call Graph & Blast Radius ───
     let cross_file_tracking = symbol_tracking::track_cross_file_symbols(&parsed_pairs);
+
+    // Build Call Graph from side B (new ASTs)
+    let b_files: Vec<(&str, &types::AstNode)> = parsed_pairs
+        .iter()
+        .filter_map(|(p, _, ast_b)| ast_b.as_ref().map(|ast| (p.as_str(), ast)))
+        .collect();
+    let call_graph = call_graph::CallGraph::build(&b_files);
+
+    // Collect modified function/symbol names
+    let mut modified_symbols: Vec<(String, &str)> = Vec::new();
+    for fd in &file_diffs {
+        for op in &fd.operations {
+            if op.op_type == types::OperationType::Modify || op.op_type == types::OperationType::Rename {
+                if let Some(sym) = refactor_detection::extract_name_from_details(&op.details) {
+                    if !sym.is_empty() {
+                        modified_symbols.push((sym.to_string(), fd.file_path.as_str()));
+                    }
+                }
+            }
+        }
+    }
+    let blast_reports = if !modified_symbols.is_empty() {
+        let sym_refs: Vec<(&str, &str)> = modified_symbols.iter().map(|(s, f)| (s.as_str(), *f)).collect();
+        let reports = call_graph.compute_blast_radius(&sym_refs);
+        if reports.iter().any(|r| r.total_impacted_callers > 0) {
+            Some(reports)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // ── Contract Violations & Security Guards Check ─────────────────
+    let mut all_violations = Vec::new();
+    for (path, ast_a, ast_b) in &parsed_pairs {
+        if let (Some(oa), Some(na)) = (ast_a, ast_b) {
+            let violations = semantic_type::detect_contract_violations(path, oa, na);
+            all_violations.extend(violations);
+        }
+    }
+    let contract_violations = if !all_violations.is_empty() {
+        Some(all_violations)
+    } else {
+        None
+    };
 
     // ── 5. Build summary ─────────────────────────────────────────────
     let summary = build_summary(&file_diffs);
 
     // ── 6. Commit classification ─────────────────────────────────────
     let logic_only_no_changes = if !logic_only {
-        let files_with_ops: Vec<_> = parsed_pairs
+        let any_logic_ops = file_diffs
             .iter()
-            .zip(file_diffs.iter())
-            .filter(|(_, fd)| !fd.operations.is_empty())
-            .collect();
-
-        let any_logic_ops = if files_with_ops.is_empty() {
-            false
-        } else {
-            files_with_ops.par_iter().any(|((_, ast_a, ast_b), _)| {
-                let logic_ops = tree_diff::compute_diff(ast_a.as_ref(), ast_b.as_ref(), true);
-                !logic_ops.is_empty()
-            })
-        };
+            .flat_map(|fd| &fd.operations)
+            .any(|op| op.is_logic_op);
         !any_logic_ops && !file_diffs.is_empty()
     } else {
         file_diffs.iter().all(|fd| fd.operations.is_empty())
@@ -390,11 +463,17 @@ fn main() -> Result<()> {
             incremental_parses: total_incremental_parses,
             nodes_reused: total_nodes_reused,
         },
+        granularity: None,
+        blast_radius: blast_reports,
+        contract_violations,
     };
 
     // ── 7. Output with shell pager support ───────────────────────────
     let mut pager = pager::Pager::setup(no_pager);
     let fmt = output::OutputFormat::parse(&args.format)?;
+    let granularity = output::determine_granularity(&diff_output, args.compact, args.full_headers);
+    let mut diff_output = diff_output;
+    diff_output.granularity = Some(granularity);
 
     let formatted_output = if args.stat {
         output::format_stat(&diff_output)
@@ -404,12 +483,13 @@ fn main() -> Result<()> {
         output::format_json(&diff_output)?
     } else {
         match fmt {
-            output::OutputFormat::Ansi => output::format_cli(&diff_output),
+            output::OutputFormat::Ansi => output::format_cli_with_granularity(&diff_output, granularity),
             output::OutputFormat::Json => output::format_json(&diff_output)?,
             output::OutputFormat::Jsonl => output::format_jsonl(&diff_output)?,
             output::OutputFormat::Markdown => output::format_markdown(&diff_output),
             output::OutputFormat::Html => output::format_html(&diff_output),
             output::OutputFormat::Sarif => output::format_sarif(&diff_output)?,
+            output::OutputFormat::Prompt => output::format_prompt(&diff_output),
         }
     };
 
@@ -438,7 +518,7 @@ fn main() -> Result<()> {
 
     pager.print_output(&formatted_output)?;
 
-    if !output_json && !args.stat && !args.name_only && fmt == output::OutputFormat::Ansi {
+    if !output_json && !args.stat && !args.name_only && fmt == output::OutputFormat::Ansi && granularity == output::DisplayGranularity::FullStructural {
         let mut diag = String::new();
         if files_skipped_blob > 0 {
             diag.push_str(&format!(
@@ -533,13 +613,17 @@ fn run_git_diff_driver(path: &str, old_file: &str, new_file: &str, args: &cli::A
             incremental_parses: 0,
             nodes_reused: 0,
         },
+        granularity: None,
+        blast_radius: None,
+        contract_violations: None,
     };
 
     let mut pager = pager::Pager::setup(args.no_pager);
     if args.json {
         pager.print_output(&output::format_json(&diff_output)?)?;
     } else {
-        pager.print_output(&output::format_cli(&diff_output))?;
+        let granularity = output::determine_granularity(&diff_output, args.compact, args.full_headers);
+        pager.print_output(&output::format_cli_with_granularity(&diff_output, granularity))?;
     }
     pager.finish();
 
@@ -715,5 +799,187 @@ fn resolve_cli_targets(args: &cli::Args) -> (String, String, Option<String>) {
             }
         }
         _ => (".".to_string(), "HEAD~1".to_string(), None),
+    }
+}
+
+fn run_lint(
+    target_path: &str,
+    queries_dir_opt: Option<&str>,
+    max_warnings: usize,
+    format_str: &str,
+) -> Result<()> {
+    use colored::Colorize;
+
+    let target_dir = Path::new(target_path);
+    let queries_dir = if let Some(qd) = queries_dir_opt {
+        PathBuf::from(qd)
+    } else {
+        target_dir.join(".symtrace").join("queries")
+    };
+
+    let query_engine = query_dsl::QueryEngine::load_from_dir(&queries_dir);
+    if query_engine.rules.is_empty() {
+        println!("[WARN] No .scm query rules found in '{}'", queries_dir.display());
+    }
+
+    // Collect and parse files in target_dir
+    let limits = types::ParserLimits::default();
+    let mut file_paths = Vec::new();
+    collect_source_files_recursive(target_dir, &mut file_paths);
+
+    let mut parsed_files = Vec::new();
+    for path in file_paths {
+        let path_str = path.to_string_lossy().to_string();
+        if let Some(lang) = language::detect_language(&path_str) {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(ast) = ast_builder::parse_content(&content, lang, false, &limits) {
+                    parsed_files.push((path_str, ast));
+                }
+            }
+        }
+    }
+
+    let file_refs: Vec<(&str, &types::AstNode)> = parsed_files
+        .iter()
+        .map(|(p, a)| (p.as_str(), a))
+        .collect();
+
+    let lint_result = query_engine.lint_files(&file_refs, max_warnings);
+
+    match format_str.to_lowercase().as_str() {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&lint_result)?);
+        }
+        "sarif" => {
+            let sarif = serde_json::json!({
+                "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+                "version": "2.1.0",
+                "runs": [{
+                    "tool": { "driver": { "name": "symtrace-lint", "version": env!("CARGO_PKG_VERSION") } },
+                    "results": lint_result.findings.iter().map(|f| {
+                        serde_json::json!({
+                            "ruleId": f.rule_name,
+                            "level": match f.severity {
+                                query_dsl::RuleSeverity::Error => "error",
+                                query_dsl::RuleSeverity::Warn => "warning",
+                                query_dsl::RuleSeverity::Info => "note",
+                            },
+                            "message": { "text": f.message },
+                            "locations": [{
+                                "physicalLocation": {
+                                    "artifactLocation": { "uri": f.file_path },
+                                    "region": { "startLine": f.line }
+                                }
+                            }]
+                        })
+                    }).collect::<Vec<_>>()
+                }]
+            });
+            println!("{}", serde_json::to_string_pretty(&sarif)?);
+        }
+        _ => {
+            println!("{}", "━━━ symtrace Semantic Linter ━━━".bold());
+            println!(
+                "Scanned: {} file(s) | Rules: {} | Errors: {} | Warnings: {} (threshold: {}) | Infos: {}\n",
+                lint_result.total_files_scanned,
+                query_engine.rules.len(),
+                lint_result.errors,
+                lint_result.warnings,
+                max_warnings,
+                lint_result.infos
+            );
+
+            for f in &lint_result.findings {
+                let badge = match f.severity {
+                    query_dsl::RuleSeverity::Error => "[ERROR]".red().bold(),
+                    query_dsl::RuleSeverity::Warn => "[WARN]".yellow().bold(),
+                    query_dsl::RuleSeverity::Info => "[INFO]".cyan().bold(),
+                };
+                println!("  {} [{}] {}:L{} — {}", badge, f.rule_name.bold(), f.file_path, f.line, f.message);
+            }
+
+            if lint_result.passed {
+                println!("\n{}", "[SUCCESS] Semantic lint checks passed cleanly.".green().bold());
+            } else {
+                eprintln!("\n{}", "[FAILURE] Semantic lint checks exceeded error/warning threshold.".red().bold());
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if !lint_result.passed {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn collect_source_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                if dir_name != ".git" && dir_name != "target" && dir_name != "node_modules" {
+                    collect_source_files_recursive(&path, out);
+                }
+            } else if path.is_file() {
+                out.push(path);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_file_content_or_none_special_paths() {
+        assert_eq!(read_file_content_or_none("."), None);
+        assert_eq!(read_file_content_or_none("/dev/null"), None);
+        assert_eq!(read_file_content_or_none(""), None);
+    }
+
+    #[test]
+    fn test_build_summary_counts() {
+        let diff = FileDiff {
+            file_path: "src/main.rs".to_string(),
+            operations: vec![
+                OperationRecord {
+                    op_type: OperationType::Insert,
+                    entity_type: EntityType::Function,
+                    old_location: None,
+                    new_location: Some("L1".to_string()),
+                    details: "insert".to_string(),
+                    similarity: None,
+                    is_logic_op: true,
+                },
+                OperationRecord {
+                    op_type: OperationType::Delete,
+                    entity_type: EntityType::Variable,
+                    old_location: Some("L5".to_string()),
+                    new_location: None,
+                    details: "delete".to_string(),
+                    similarity: None,
+                    is_logic_op: true,
+                },
+            ],
+            refactor_patterns: vec![],
+        };
+        let summary = build_summary(&[diff]);
+        assert_eq!(summary.total_files, 1);
+        assert_eq!(summary.inserts, 1);
+        assert_eq!(summary.deletes, 1);
+        assert_eq!(summary.modifications, 0);
+    }
+
+    #[test]
+    fn test_collect_source_files_recursive() {
+        let dir = Path::new("src");
+        let mut files = Vec::new();
+        collect_source_files_recursive(dir, &mut files);
+        assert!(!files.is_empty());
+        assert!(files.iter().any(|p| p.ends_with("main.rs")));
     }
 }

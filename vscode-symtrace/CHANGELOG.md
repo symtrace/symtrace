@@ -2,10 +2,18 @@
 
 All notable changes to the "symtrace-vscode" extension will be documented in this file.
 
+## [0.5.0] - 2026-08-17
+
+### Added
+- Added adaptive granularity output support (`MicroCompact`, `Standard`, `FullStructural`).
+- Added semantic blast radius and contract violation display in tree view and webview reports.
+- Added client types for `DisplayGranularity`, `BlastRadiusReport`, and `ContractViolation`.
+- Aligned extension binary downloader with `v0.5.0` GitHub release artifacts (`symtrace/symtrace`).
+
 ## [0.4.5] - 2026-08-10
 
 ### Fixed & Enhanced
-- Aligned extension binary downloader with `v0.4.5` GitHub release artifacts (`JashT14/symtrace`).
+- Aligned extension binary downloader with `v0.4.5` GitHub release artifacts (`symtrace/symtrace`).
 - Full schema support for camelCase `v0.4.5` output streams including multiset frequency similarity and line windowing.
 
 ## [0.4.0] - 2026-08-08

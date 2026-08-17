@@ -40,16 +40,16 @@ pub fn track_cross_file_symbols(
 
     for (path, old_ast, new_ast) in parsed_pairs {
         if let Some(ast) = old_ast {
-            collect_symbols(ast, path, 0, &mut old_symbols, &mut id_counter);
+            collect_symbols(ast, path, 0, &mut old_symbols, &mut id_counter, 0);
         }
         if let Some(ast) = new_ast {
-            collect_symbols(ast, path, 0, &mut new_symbols, &mut id_counter);
+            collect_symbols(ast, path, 0, &mut new_symbols, &mut id_counter, 0);
         }
     }
 
     let total_symbol_count = old_symbols.len() + new_symbols.len();
 
-    // Detect cross-file events
+    // Detect cross-file events using O(M + N) hash-indexed SymbolIndex
     let events = detect_cross_file_events(&old_symbols, &new_symbols, parsed_pairs);
 
     CrossFileTracking {
@@ -67,7 +67,12 @@ fn collect_symbols(
     parent_id: SymbolId,
     symbols: &mut Vec<SymbolEntry>,
     id_counter: &mut SymbolId,
+    depth: usize,
 ) {
+    if depth > 64 {
+        return; // Recursion limit guard
+    }
+
     if let Some(entity_type) = classify_symbol_entity(&node.kind) {
         let name = extract_symbol_name(node);
         let sig_hash = compute_signature_hash(node);
@@ -86,12 +91,12 @@ fn collect_symbols(
 
         // Recurse into children with this symbol as parent
         for child in &node.children {
-            collect_symbols(child, file_path, sym_id, symbols, id_counter);
+            collect_symbols(child, file_path, sym_id, symbols, id_counter, depth + 1);
         }
     } else {
         // Not a symbol-bearing node, recurse with same parent
         for child in &node.children {
-            collect_symbols(child, file_path, parent_id, symbols, id_counter);
+            collect_symbols(child, file_path, parent_id, symbols, id_counter, depth + 1);
         }
     }
 }
@@ -173,41 +178,81 @@ fn classify_symbol_entity(kind: &str) -> Option<EntityType> {
     }
 }
 
+// ── Hash-Indexed Symbol Index ────────────────────────────────────────
+
+use std::collections::{HashMap, HashSet};
+
+/// Pre-indexed lookup structure for O(1) candidate matching across symbols.
+struct SymbolIndex {
+    by_struct_sig: HashMap<([u8; 32], [u8; 32]), Vec<usize>>,
+    by_struct_only: HashMap<[u8; 32], Vec<usize>>,
+    by_name_only: HashMap<String, Vec<usize>>,
+    same_file_set: HashSet<(String, String, [u8; 32])>,
+}
+
+impl SymbolIndex {
+    fn build(symbols: &[SymbolEntry]) -> Self {
+        let mut by_struct_sig: HashMap<([u8; 32], [u8; 32]), Vec<usize>> = HashMap::new();
+        let mut by_struct_only: HashMap<[u8; 32], Vec<usize>> = HashMap::new();
+        let mut by_name_only: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut same_file_set: HashSet<(String, String, [u8; 32])> = HashSet::new();
+
+        for (idx, sym) in symbols.iter().enumerate() {
+            by_struct_sig
+                .entry((sym.structure_hash, sym.signature_hash))
+                .or_default()
+                .push(idx);
+
+            by_struct_only
+                .entry(sym.structure_hash)
+                .or_default()
+                .push(idx);
+
+            by_name_only
+                .entry(sym.name.clone())
+                .or_default()
+                .push(idx);
+
+            same_file_set.insert((sym.file_path.clone(), sym.name.clone(), sym.structure_hash));
+        }
+
+        SymbolIndex {
+            by_struct_sig,
+            by_struct_only,
+            by_name_only,
+            same_file_set,
+        }
+    }
+}
+
 // ── Cross-File Event Detection ───────────────────────────────────────
 
-/// Detect cross-file events by comparing old symbols against new symbols.
+/// Detect cross-file events by comparing old symbols against new symbols in O(M + N) time.
 fn detect_cross_file_events(
     old_symbols: &[SymbolEntry],
     new_symbols: &[SymbolEntry],
     parsed_pairs: &[(String, Option<AstNode>, Option<AstNode>)],
 ) -> Vec<CrossFileMatch> {
     let mut events = Vec::new();
-
-    // We only look for symbols that disappeared from one file and appeared in another.
-    // For each old symbol, try to find a matching new symbol in a DIFFERENT file.
+    let index = SymbolIndex::build(new_symbols);
 
     // Track which new symbols have been matched
     let mut matched_new: Vec<bool> = vec![false; new_symbols.len()];
 
     for old_sym in old_symbols {
-        // Check if this symbol still exists in its own file in the new version
-        let still_in_same_file = new_symbols.iter().any(|ns| {
-            ns.file_path == old_sym.file_path
-                && ns.name == old_sym.name
-                && ns.structure_hash == old_sym.structure_hash
-        });
-        if still_in_same_file {
+        // O(1) check if this symbol still exists in its own file in the new version
+        if index.same_file_set.contains(&(old_sym.file_path.clone(), old_sym.name.clone(), old_sym.structure_hash)) {
             continue;
         }
 
         // ── 1. Cross-file move: same structure_hash + signature_hash, different file
-        for (ni, new_sym) in new_symbols.iter().enumerate() {
-            if matched_new[ni] || new_sym.file_path == old_sym.file_path {
-                continue;
-            }
-            if new_sym.structure_hash == old_sym.structure_hash
-                && new_sym.signature_hash == old_sym.signature_hash
-            {
+        let mut matched = false;
+        if let Some(candidates) = index.by_struct_sig.get(&(old_sym.structure_hash, old_sym.signature_hash)) {
+            for &ni in candidates {
+                let new_sym = &new_symbols[ni];
+                if matched_new[ni] || new_sym.file_path == old_sym.file_path {
+                    continue;
+                }
                 matched_new[ni] = true;
                 events.push(CrossFileMatch {
                     event: CrossFileEventKind::CrossFileMove,
@@ -221,69 +266,76 @@ fn detect_cross_file_events(
                         old_sym.entity_type, old_sym.name, old_sym.file_path, new_sym.file_path
                     ),
                 });
+                matched = true;
                 break;
             }
         }
+        if matched {
+            continue;
+        }
 
         // ── 2. Cross-file rename: same structure_hash, different name, different file
-        for (ni, new_sym) in new_symbols.iter().enumerate() {
-            if matched_new[ni] || new_sym.file_path == old_sym.file_path {
-                continue;
-            }
-            if new_sym.structure_hash == old_sym.structure_hash
-                && new_sym.name != old_sym.name
-                && new_sym.entity_type == old_sym.entity_type
-            {
-                // Compute similarity using AST nodes
-                let sim = compute_cross_file_similarity(old_sym, new_sym, parsed_pairs);
-                if sim >= CROSS_FILE_RENAME_THRESHOLD {
-                    matched_new[ni] = true;
-                    events.push(CrossFileMatch {
-                        event: CrossFileEventKind::CrossFileRename,
-                        old_symbol: old_sym.name.clone(),
-                        old_file: old_sym.file_path.clone(),
-                        new_symbol: new_sym.name.clone(),
-                        new_file: new_sym.file_path.clone(),
-                        similarity_score: sim,
-                        description: format!(
-                            "{} '{}' in '{}' renamed to '{}' in '{}'",
-                            old_sym.entity_type,
-                            old_sym.name,
-                            old_sym.file_path,
-                            new_sym.name,
-                            new_sym.file_path,
-                        ),
-                    });
-                    break;
+        if let Some(candidates) = index.by_struct_only.get(&old_sym.structure_hash) {
+            for &ni in candidates {
+                let new_sym = &new_symbols[ni];
+                if matched_new[ni] || new_sym.file_path == old_sym.file_path {
+                    continue;
+                }
+                if new_sym.name != old_sym.name && new_sym.entity_type == old_sym.entity_type {
+                    let sim = compute_cross_file_similarity(old_sym, new_sym, parsed_pairs);
+                    if sim >= CROSS_FILE_RENAME_THRESHOLD {
+                        matched_new[ni] = true;
+                        events.push(CrossFileMatch {
+                            event: CrossFileEventKind::CrossFileRename,
+                            old_symbol: old_sym.name.clone(),
+                            old_file: old_sym.file_path.clone(),
+                            new_symbol: new_sym.name.clone(),
+                            new_file: new_sym.file_path.clone(),
+                            similarity_score: sim,
+                            description: format!(
+                                "{} '{}' in '{}' renamed to '{}' in '{}'",
+                                old_sym.entity_type,
+                                old_sym.name,
+                                old_sym.file_path,
+                                new_sym.name,
+                                new_sym.file_path,
+                            ),
+                        });
+                        matched = true;
+                        break;
+                    }
                 }
             }
         }
+        if matched {
+            continue;
+        }
 
         // ── 3. API surface change: same name, different file, different signature
-        for (ni, new_sym) in new_symbols.iter().enumerate() {
-            if matched_new[ni] || new_sym.file_path == old_sym.file_path {
-                continue;
-            }
-            if new_sym.name == old_sym.name
-                && new_sym.entity_type == old_sym.entity_type
-                && new_sym.signature_hash != old_sym.signature_hash
-            {
-                let sim = compute_cross_file_similarity(old_sym, new_sym, parsed_pairs);
-                if sim >= API_SURFACE_THRESHOLD {
-                    matched_new[ni] = true;
-                    events.push(CrossFileMatch {
-                        event: CrossFileEventKind::ApiSurfaceChange,
-                        old_symbol: old_sym.name.clone(),
-                        old_file: old_sym.file_path.clone(),
-                        new_symbol: new_sym.name.clone(),
-                        new_file: new_sym.file_path.clone(),
-                        similarity_score: sim,
-                        description: format!(
-                            "{} '{}' API changed when moving from '{}' to '{}'",
-                            old_sym.entity_type, old_sym.name, old_sym.file_path, new_sym.file_path,
-                        ),
-                    });
-                    break;
+        if let Some(candidates) = index.by_name_only.get(&old_sym.name) {
+            for &ni in candidates {
+                let new_sym = &new_symbols[ni];
+                if matched_new[ni] || new_sym.file_path == old_sym.file_path {
+                    continue;
+                }
+                if new_sym.entity_type == old_sym.entity_type && new_sym.signature_hash != old_sym.signature_hash {
+                    let sim = compute_cross_file_similarity(old_sym, new_sym, parsed_pairs);
+                    if sim >= API_SURFACE_THRESHOLD {
+                        matched_new[ni] = true;
+                        events.push(CrossFileMatch {
+                            event: CrossFileEventKind::ApiSurfaceChange,
+                            old_symbol: old_sym.name.clone(),
+                            old_file: old_sym.file_path.clone(),
+                            new_symbol: new_sym.name.clone(),
+                            new_file: new_sym.file_path.clone(),
+                            similarity_score: sim,
+                            description: format!(
+                                "{} '{}' API changed when moving from '{}' to '{}'",
+                                old_sym.entity_type, old_sym.name, old_sym.file_path, new_sym.file_path,
+                            ),
+                        });
+                        break;
+                    }
                 }
             }
         }
@@ -509,5 +561,35 @@ mod tests {
             "symbol staying in same file should not trigger cross-file events, got: {:?}",
             result.cross_file_events
         );
+    }
+
+    #[test]
+    fn test_classify_symbol_entity_more_types() {
+        assert_eq!(classify_symbol_entity("struct_item"), Some(EntityType::Class));
+        assert_eq!(classify_symbol_entity("enum_item"), Some(EntityType::Class));
+        assert_eq!(classify_symbol_entity("const_item"), Some(EntityType::Variable));
+    }
+
+    #[test]
+    fn test_symbol_index_empty() {
+        let index = SymbolIndex::build(&[]);
+        assert!(index.by_struct_sig.is_empty());
+        assert!(index.by_struct_only.is_empty());
+        assert!(index.by_name_only.is_empty());
+    }
+
+    #[test]
+    fn test_symbol_entry_creation() {
+        let sym = SymbolEntry {
+            symbol_id: 1,
+            name: "test_func".to_string(),
+            file_path: "src/test.rs".to_string(),
+            entity_type: EntityType::Function,
+            structure_hash: [1u8; 32],
+            signature_hash: [2u8; 32],
+            parent_symbol_id: 0,
+        };
+        assert_eq!(sym.name, "test_func");
+        assert_eq!(sym.symbol_id, 1);
     }
 }
